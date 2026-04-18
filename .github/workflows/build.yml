@@ -3,7 +3,10 @@ name: Build APK
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # можно запустить вручную из GitHub
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -22,18 +25,28 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
+      - name: Get version info
+        id: version
+        run: |
+          echo "date=$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: BoberClicker-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
+          tag_name: build-${{ steps.version.outputs.date }}-${{ steps.version.outputs.sha }}
+          name: "🦫 Bober Clicker ${{ steps.version.outputs.date }}"
+          body: |
+            Автоматическая сборка из ветки `main`
+            Коммит: `${{ github.sha }}`
+          files: app/build/outputs/apk/debug/app-debug.apk
+          make_latest: true
