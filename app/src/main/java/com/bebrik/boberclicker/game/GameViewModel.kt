@@ -1,13 +1,12 @@
 package com.bebrik.boberclicker.game
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import com.bebrik.boberclicker.data.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 data class GameState(
     val score: Double = 0.0,
@@ -30,20 +29,37 @@ data class QuestState(
 
 class GameViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val _state = MutableStateFlow(GameState())
-    val state: StateFlow<GameState> = _state.asStateFlow()
+    private val _state = MutableLiveData(GameState())
+    val state: LiveData<GameState> = _state
 
     private var save = GameSave()
-    private var passiveTick = 0L
-    private var autoSaveJob: Job? = null
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val passiveTick = object : Runnable {
+        override fun run() {
+            if (save.passiveIncome > 0) {
+                save.score += save.passiveIncome
+                save.totalEarned += save.passiveIncome
+                checkQuestsOnEarn()
+                checkAchievementsOnScore()
+                emitState()
+            }
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    private val autoSaveTick = object : Runnable {
+        override fun run() {
+            saveGame()
+            handler.postDelayed(this, 30_000)
+        }
+    }
 
     init {
         loadGame()
-        startPassiveIncome()
-        startAutoSave()
+        handler.postDelayed(passiveTick, 1000)
+        handler.postDelayed(autoSaveTick, 30_000)
     }
-
-    // ─── Загрузка / Сохранение ────────────────────────────────────
 
     private fun loadGame() {
         save = SaveManager.load(getApplication())
@@ -54,8 +70,6 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         SaveManager.save(getApplication(), save)
     }
 
-    // ─── Основной клик ───────────────────────────────────────────
-
     fun onBoberClick() {
         save.score += save.clickPower
         save.totalEarned += save.clickPower
@@ -64,34 +78,6 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         checkAchievementsOnClick()
         emitState()
     }
-
-    // ─── Пассивный доход ─────────────────────────────────────────
-
-    private fun startPassiveIncome() {
-        viewModelScope.launch {
-            while (true) {
-                delay(1000)
-                if (save.passiveIncome > 0) {
-                    save.score += save.passiveIncome
-                    save.totalEarned += save.passiveIncome
-                    checkQuestsOnEarn()
-                    checkAchievementsOnScore()
-                    emitState()
-                }
-            }
-        }
-    }
-
-    private fun startAutoSave() {
-        autoSaveJob = viewModelScope.launch {
-            while (true) {
-                delay(30_000)
-                saveGame()
-            }
-        }
-    }
-
-    // ─── Магазин ─────────────────────────────────────────────────
 
     fun buyUpgrade(id: String): Boolean {
         val def = ALL_UPGRADES.find { it.id == id } ?: return false
@@ -102,8 +88,6 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
         save.score -= cost
         save.upgrades[id] = level + 1
-
-        // Пересчитываем бонусы
         recalcStats()
         checkQuestsOnPurchase(id)
         checkAchievementsOnShop()
@@ -123,8 +107,6 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         save.passiveIncome = passive
     }
 
-    // ─── Квесты ──────────────────────────────────────────────────
-
     private fun checkQuestsOnClick() {
         for (q in ALL_QUESTS) {
             if (q.type != QuestType.TOTAL_CLICKS) continue
@@ -140,9 +122,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
             val s = save.quests.getOrPut(q.id) { QuestSave() }
             if (s.completed) continue
             when (q.type) {
-                QuestType.TOTAL_EARNED -> { s.progress = save.totalEarned; if (s.progress >= q.target) s.completed = true }
-                QuestType.REACH_SCORE  -> { s.progress = save.score;       if (s.progress >= q.target) s.completed = true }
-                QuestType.PASSIVE_INCOME -> { s.progress = save.passiveIncome; if (s.progress >= q.target) s.completed = true }
+                QuestType.TOTAL_EARNED   -> { s.progress = save.totalEarned;    if (s.progress >= q.target) s.completed = true }
+                QuestType.REACH_SCORE    -> { s.progress = save.score;          if (s.progress >= q.target) s.completed = true }
+                QuestType.PASSIVE_INCOME -> { s.progress = save.passiveIncome;  if (s.progress >= q.target) s.completed = true }
                 else -> {}
             }
         }
@@ -163,13 +145,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         s.claimed = true
         save.score += q.reward
         save.totalEarned += q.reward
-
-        // Проверяем ачивку "все квесты"
         if (save.quests.values.all { it.claimed }) unlockAchievement("all_quests")
         emitState()
     }
-
-    // ─── Достижения ──────────────────────────────────────────────
 
     private fun checkAchievementsOnClick() {
         if (save.totalClicks >= 1)       unlockAchievement("first_click")
@@ -187,8 +165,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun checkAchievementsOnShop() {
         unlockAchievement("first_upgrade")
-        val allBought = ALL_UPGRADES.all { (save.upgrades[it.id] ?: 0) > 0 }
-        if (allBought) unlockAchievement("all_upgrades")
+        if (ALL_UPGRADES.all { (save.upgrades[it.id] ?: 0) > 0 }) unlockAchievement("all_upgrades")
     }
 
     fun unlockMiniGameAchievement() {
@@ -200,14 +177,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         if (save.achievements.contains(id)) return
         save.achievements.add(id)
         val def = ALL_ACHIEVEMENTS.find { it.id == id }
-        _state.value = _state.value.copy(newAchievement = def)
+        _state.value = _state.value!!.copy(newAchievement = def)
     }
 
     fun clearNewAchievement() {
-        _state.value = _state.value.copy(newAchievement = null)
+        _state.value = _state.value!!.copy(newAchievement = null)
     }
-
-    // ─── Вспомогательные ─────────────────────────────────────────
 
     fun addScoreFromMiniGame(amount: Double) {
         save.score += amount
@@ -227,12 +202,15 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                 val s = save.quests[q.id] ?: QuestSave()
                 QuestState(q, s.progress, s.completed, s.claimed)
             },
-            achievements = save.achievements.toSet()
+            achievements = save.achievements.toSet(),
+            newAchievement = _state.value?.newAchievement
         )
     }
 
     override fun onCleared() {
         super.onCleared()
+        handler.removeCallbacks(passiveTick)
+        handler.removeCallbacks(autoSaveTick)
         saveGame()
     }
 }
