@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0c1a2e">
+
+    <!-- Счёт -->
+    <TextView android:id="@+id/tvScore"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="0 🦫" android:textSize="40sp" android:textColor="#FFFFFF"
+        android:textStyle="bold" android:gravity="center"
+        app:layout_constraintTop_toTopOf="parent" app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" android:layout_marginTop="32dp"/>
+
+    <!-- Пассивный доход -->
+    <TextView android:id="@+id/tvPassive"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="+0/сек" android:textSize="16sp" android:textColor="#88AABB"
+        android:gravity="center"
+        app:layout_constraintTop_toBottomOf="@id/tvScore" app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" android:layout_marginTop="4dp"/>
+
+    <!-- Сила клика -->
+    <TextView android:id="@+id/tvClickPower"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="+1 за клик" android:textSize="14sp" android:textColor="#667788"
+        android:gravity="center"
+        app:layout_constraintTop_toBottomOf="@id/tvPassive" app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" android:layout_marginTop="2dp"/>
+
+    <!-- Кнопка бобра -->
+    <Button android:id="@+id/btnBober"
+        android:layout_width="200dp" android:layout_height="200dp"
+        android:text="🦫" android:textSize="80sp"
+        android:background="@drawable/btn_bober"
+        android:elevation="8dp"
+        app:layout_constraintTop_toBottomOf="@id/tvClickPower"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/navBar"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Навигация -->
+    <LinearLayout android:id="@+id/navBar"
+        android:layout_width="match_parent" android:layout_height="72dp"
+        android:orientation="horizontal" android:background="#0a1520"
+        android:gravity="center"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <Button android:id="@+id/btnShop"
+            style="@style/NavBtn" android:text="🛒\nМагазин"/>
+        <Button android:id="@+id/btnQuests"
+            style="@style/NavBtn" android:text="📜\nКвесты"/>
+        <Button android:id="@+id/btnAchievements"
+            style="@style/NavBtn" android:text="🏆\nАчивки"/>
+        <Button android:id="@+id/btnMinigame"
+            style="@style/NavBtn" android:text="✈️\nМини-игра"/>
+    </LinearLayout>
+
+    <!-- Панель магазина -->
+    <FrameLayout android:id="@+id/panelShop"
+        android:layout_width="match_parent" android:layout_height="0dp"
+        android:visibility="gone" android:background="#CC0a1520"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/navBar">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent"
+            android:orientation="vertical" android:padding="8dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="🛒 Магазин"
+                    android:textSize="20sp" android:textColor="#FFFFFF" android:textStyle="bold"/>
+                <Button android:id="@+id/btnCloseShop" android:layout_width="48dp"
+                    android:layout_height="48dp" android:text="✕"
+                    android:textColor="#FFFFFF" android:background="@android:color/transparent"/>
+            </LinearLayout>
+            <ScrollView android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1">
+                <LinearLayout android:id="@+id/listShop"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical"/>
+            </ScrollView>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Панель квестов -->
+    <FrameLayout android:id="@+id/panelQuests"
+        android:layout_width="match_parent" android:layout_height="0dp"
+        android:visibility="gone" android:background="#CC0a1520"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/navBar">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent"
+            android:orientation="vertical" android:padding="8dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="📜 Квесты"
+                    android:textSize="20sp" android:textColor="#FFFFFF" android:textStyle="bold"/>
+                <Button android:id="@+id/btnCloseQuests" android:layout_width="48dp"
+                    android:layout_height="48dp" android:text="✕"
+                    android:textColor="#FFFFFF" android:background="@android:color/transparent"/>
+            </LinearLayout>
+            <ScrollView android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1">
+                <LinearLayout android:id="@+id/listQuests"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical"/>
+            </ScrollView>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Панель достижений -->
+    <FrameLayout android:id="@+id/panelAchievements"
+        android:layout_width="match_parent" android:layout_height="0dp"
+        android:visibility="gone" android:background="#CC0a1520"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/navBar">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent"
+            android:orientation="vertical" android:padding="8dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="🏆 Достижения"
+                    android:textSize="20sp" android:textColor="#FFFFFF" android:textStyle="bold"/>
+                <Button android:id="@+id/btnCloseAchievements" android:layout_width="48dp"
+                    android:layout_height="48dp" android:text="✕"
+                    android:textColor="#FFFFFF" android:background="@android:color/transparent"/>
+            </LinearLayout>
+            <ScrollView android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1">
+                <LinearLayout android:id="@+id/listAchievements"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical"/>
+            </ScrollView>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Toast достижения -->
+    <TextView android:id="@+id/tvAchievementToast"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:background="@drawable/bg_toast" android:textColor="#FFFFFF"
+        android:textSize="16sp" android:padding="12dp"
+        android:visibility="gone" android:alpha="0"
+        app:layout_constraintBottom_toTopOf="@id/navBar"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="16dp"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -1,0 +1,2 @@
+-keep class com.bebrik.boberclicker.data.** { *; }
+-dontwarn kotlin.**

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BoberClicker" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#5599FF</item>
+        <item name="colorPrimaryVariant">#3377DD</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSurface">#0c1a2e</item>
+        <item name="android:windowBackground">#0c1a2e</item>
+        <item name="android:statusBarColor">#0a1520</item>
+        <item name="android:navigationBarColor">#0a1520</item>
+    </style>
+</resources>
