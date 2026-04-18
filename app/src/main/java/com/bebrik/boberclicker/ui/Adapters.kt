@@ -1,91 +1,112 @@
 package com.bebrik.boberclicker.ui
 
+import android.graphics.BitmapFactory
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.*
 import com.bebrik.boberclicker.R
 import com.bebrik.boberclicker.data.*
-import com.bebrik.boberclicker.game.QuestState
 
-// ─── Магазин ─────────────────────────────────────────────────────
+// ─── Магазин улучшений ───────────────────────────────────────────
 
-object ShopAdapter {
+object ShopUpgradeAdapter {
     fun update(
         container: LinearLayout,
-        upgrades: List<UpgradeDef>,
-        levels: Map<String, Int>,
+        defs: List<UpgradeDef>,
+        counts: UpgradeCounts,
         score: Double,
         onBuy: (String) -> Unit
     ) {
-        if (container.childCount != upgrades.size) {
+        if (container.childCount != defs.size) {
             container.removeAllViews()
-            val inflater = LayoutInflater.from(container.context)
-            for (def in upgrades) {
-                val row = inflater.inflate(R.layout.item_shop, container, false)
-                row.tag = def.id
-                container.addView(row)
-            }
+            val inf = LayoutInflater.from(container.context)
+            defs.forEach { container.addView(inf.inflate(R.layout.item_upgrade, container, false)) }
         }
-        for (i in upgrades.indices) {
-            val def = upgrades[i]
-            val row = container.getChildAt(i)
-            val level = levels[def.id] ?: 0
-            val cost = def.costAt(level)
-            val maxed = level >= def.maxLevel
-
-            row.findViewById<TextView>(R.id.tvName).text    = "${def.emoji} ${def.name}"
+        defs.forEachIndexed { i, def ->
+            val row   = container.getChildAt(i)
+            val level = def.getLevel(counts)
+            row.findViewById<TextView>(R.id.tvEmoji).text   = def.emoji
+            row.findViewById<TextView>(R.id.tvName).text    = def.name
             row.findViewById<TextView>(R.id.tvDesc).text    = def.description
-            row.findViewById<TextView>(R.id.tvLevel).text   = if (maxed) "МАКС" else "Ур.$level/${def.maxLevel}"
+            row.findViewById<TextView>(R.id.tvLevel).text   = "Ур. $level"
             val btn = row.findViewById<Button>(R.id.btnBuy)
-            btn.text = if (maxed) "Макс" else "💰 ${cost.formatScore()}"
-            btn.isEnabled = !maxed && score >= cost
+            btn.text = "💰 ${def.baseCost.fmt()}"
+            btn.isEnabled = score >= def.baseCost
             btn.setOnClickListener { onBuy(def.id) }
         }
     }
 }
 
-// ─── Квесты ──────────────────────────────────────────────────────
+// ─── Магазин скинов ──────────────────────────────────────────────
 
-object QuestAdapter {
+object ShopSkinAdapter {
     fun update(
         container: LinearLayout,
-        quests: List<QuestState>,
-        onClaim: (String) -> Unit
+        skins: List<SkinDef>,
+        owned: Set<String>,
+        equipped: String,
+        score: Double,
+        onBuy: (String) -> Unit,
+        onEquip: (String) -> Unit
     ) {
-        if (container.childCount != quests.size) {
+        val visible = skins.filter { !it.grantOnly }
+        if (container.childCount != visible.size) {
             container.removeAllViews()
-            val inflater = LayoutInflater.from(container.context)
-            for (q in quests) {
-                val row = inflater.inflate(R.layout.item_quest, container, false)
-                row.tag = q.def.id
-                container.addView(row)
+            val inf = LayoutInflater.from(container.context)
+            visible.forEach { container.addView(inf.inflate(R.layout.item_skin, container, false)) }
+        }
+        visible.forEachIndexed { i, skin ->
+            val row = container.getChildAt(i)
+            val isOwned    = owned.contains(skin.id)
+            val isEquipped = skin.id == equipped
+
+            row.findViewById<TextView>(R.id.tvSkinName).text   = skin.name
+            row.findViewById<TextView>(R.id.tvSkinRarity).text = rarityLabel(skin.rarity)
+            row.findViewById<TextView>(R.id.tvSkinRarity).setTextColor(rarityColor(skin.rarity, row))
+
+            // Картинка
+            val img = row.findViewById<ImageView>(R.id.imgSkin)
+            try {
+                row.context.assets.open("skins/${skin.assetFile}").use { stream ->
+                    img.setImageBitmap(BitmapFactory.decodeStream(stream))
+                }
+            } catch (e: Exception) { /* оставить пустым */ }
+
+            val btn = row.findViewById<Button>(R.id.btnSkinAction)
+            when {
+                isEquipped -> { btn.text = "✓ Надет"; btn.isEnabled = false }
+                isOwned    -> { btn.text = "Надеть";  btn.isEnabled = true; btn.setOnClickListener { onEquip(skin.id) } }
+                skin.price == 0.0 -> { btn.text = "Получить"; btn.isEnabled = true; btn.setOnClickListener { onBuy(skin.id) } }
+                else       -> {
+                    btn.text = "💰 ${skin.price.fmt()}"
+                    btn.isEnabled = score >= skin.price
+                    btn.setOnClickListener { onBuy(skin.id) }
+                }
             }
         }
-        for (i in quests.indices) {
-            val q = quests[i]
-            val row = container.getChildAt(i)
+    }
 
-            row.findViewById<TextView>(R.id.tvTitle).text    = q.def.title
-            row.findViewById<TextView>(R.id.tvDesc).text     = q.def.description
-            row.findViewById<TextView>(R.id.tvReward).text   = "+${q.def.reward.formatScore()} 🦫"
+    private fun rarityLabel(r: String) = when(r) {
+        "common"   -> "Обычный"
+        "uncommon" -> "Необычный"
+        "rare"     -> "Редкий"
+        "epic"     -> "Эпик"
+        "legendary"-> "Легендарный"
+        "admin"    -> "Admin"
+        else -> r
+    }
 
-            val progressBar = row.findViewById<android.widget.ProgressBar>(R.id.progressBar)
-            val tvProgress  = row.findViewById<TextView>(R.id.tvProgress)
-            val btnClaim    = row.findViewById<Button>(R.id.btnClaim)
-
-            val pct = (q.progress / q.def.target).coerceIn(0.0, 1.0)
-            progressBar.progress = (pct * 100).toInt()
-
-            tvProgress.text = if (q.completed) "✅ Выполнено!" else
-                "${q.progress.formatScore()} / ${q.def.target.formatScore()}"
-
-            btnClaim.visibility = if (q.completed && !q.claimed) View.VISIBLE else View.GONE
-            btnClaim.setOnClickListener { onClaim(q.def.id) }
-
-            row.alpha = if (q.claimed) 0.5f else 1f
+    private fun rarityColor(r: String, v: View): Int {
+        val ctx = v.context
+        return when(r) {
+            "common"    -> ctx.getColor(android.R.color.darker_gray)
+            "uncommon"  -> 0xFF4CAF50.toInt()
+            "rare"      -> 0xFF2196F3.toInt()
+            "epic"      -> 0xFF9C27B0.toInt()
+            "legendary" -> 0xFFFFD700.toInt()
+            "admin"     -> 0xFFFF5722.toInt()
+            else        -> ctx.getColor(android.R.color.darker_gray)
         }
     }
 }
@@ -96,21 +117,16 @@ object AchievementAdapter {
     fun update(container: LinearLayout, unlocked: Set<String>) {
         if (container.childCount != ALL_ACHIEVEMENTS.size) {
             container.removeAllViews()
-            val inflater = LayoutInflater.from(container.context)
-            for (ach in ALL_ACHIEVEMENTS) {
-                val row = inflater.inflate(R.layout.item_achievement, container, false)
-                container.addView(row)
-            }
+            val inf = LayoutInflater.from(container.context)
+            ALL_ACHIEVEMENTS.forEach { container.addView(inf.inflate(R.layout.item_achievement, container, false)) }
         }
-        for (i in ALL_ACHIEVEMENTS.indices) {
-            val ach = ALL_ACHIEVEMENTS[i]
+        ALL_ACHIEVEMENTS.forEachIndexed { i, ach ->
             val row = container.getChildAt(i)
             val isUnlocked = unlocked.contains(ach.id)
-
-            row.findViewById<TextView>(R.id.tvEmoji).text = ach.emoji
+            row.findViewById<TextView>(R.id.tvEmoji).text = if (isUnlocked) ach.icon else "🔒"
             row.findViewById<TextView>(R.id.tvTitle).text = if (isUnlocked) ach.title else "???"
             row.findViewById<TextView>(R.id.tvDesc).text  = if (isUnlocked) ach.description else "Не разблокировано"
-            row.alpha = if (isUnlocked) 1f else 0.4f
+            row.alpha = if (isUnlocked) 1f else 0.35f
         }
     }
 }
