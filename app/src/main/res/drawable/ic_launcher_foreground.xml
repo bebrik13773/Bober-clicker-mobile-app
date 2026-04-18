@@ -2,29 +2,53 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
+
     <!-- Фон -->
     <path android:fillColor="#0c1a2e"
         android:pathData="M0,0 L108,0 L108,108 L0,108 Z"/>
+
     <!-- Тело бобра -->
     <path android:fillColor="#8B4513"
         android:pathData="M54,20 C35,20 22,35 22,54 C22,73 35,82 54,82 C73,82 86,73 86,54 C86,35 73,20 54,20 Z"/>
+
     <!-- Брюхо -->
     <path android:fillColor="#C68642"
         android:pathData="M54,38 C44,38 38,46 38,54 C38,62 44,68 54,68 C64,68 70,62 70,54 C70,46 64,38 54,38 Z"/>
-    <!-- Глаза -->
-    <circle android:fillColor="#FFFFFF" android:cx="44" android:cy="48" android:r="6"/>
-    <circle android:fillColor="#FFFFFF" android:cx="64" android:cy="48" android:r="6"/>
-    <circle android:fillColor="#1a1a1a" android:cx="46" android:cy="48" android:r="3"/>
-    <circle android:fillColor="#1a1a1a" android:cx="66" android:cy="48" android:r="3"/>
+
+    <!-- Глаз левый (белок) cx=44 cy=48 r=6 -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M44,48 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0"/>
+    <!-- Глаз правый (белок) cx=64 cy=48 r=6 -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M64,48 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0"/>
+
+    <!-- Зрачок левый cx=46 cy=48 r=3 -->
+    <path android:fillColor="#1a1a1a"
+        android:pathData="M46,48 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"/>
+    <!-- Зрачок правый cx=66 cy=48 r=3 -->
+    <path android:fillColor="#1a1a1a"
+        android:pathData="M66,48 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"/>
+
     <!-- Нос -->
     <path android:fillColor="#5D2E0C"
         android:pathData="M50,57 L54,62 L58,57 Z"/>
+
     <!-- Хвост -->
     <path android:fillColor="#5D2E0C"
         android:pathData="M40,78 C30,82 26,90 32,92 C38,94 48,88 54,84 C48,86 36,86 40,78 Z"/>
-    <!-- Уши -->
-    <circle android:fillColor="#8B4513" android:cx="36" android:cy="28" android:r="8"/>
-    <circle android:fillColor="#8B4513" android:cx="72" android:cy="28" android:r="8"/>
-    <circle android:fillColor="#C68642" android:cx="36" android:cy="28" android:r="4"/>
-    <circle android:fillColor="#C68642" android:cx="72" android:cy="28" android:r="4"/>
+
+    <!-- Ухо левое (внешнее) cx=36 cy=28 r=8 -->
+    <path android:fillColor="#8B4513"
+        android:pathData="M36,28 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0"/>
+    <!-- Ухо правое (внешнее) cx=72 cy=28 r=8 -->
+    <path android:fillColor="#8B4513"
+        android:pathData="M72,28 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0"/>
+
+    <!-- Ухо левое (внутреннее) cx=36 cy=28 r=4 -->
+    <path android:fillColor="#C68642"
+        android:pathData="M36,28 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"/>
+    <!-- Ухо правое (внутреннее) cx=72 cy=28 r=4 -->
+    <path android:fillColor="#C68642"
+        android:pathData="M72,28 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"/>
+
 </vector>
