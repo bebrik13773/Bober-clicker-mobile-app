@@ -3,9 +3,10 @@ package com.bebrik.boberclicker.ui
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import android.view.animation.Animation
 import android.view.animation.AnimationUtils
-import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.ViewModelProvider
 import com.bebrik.boberclicker.R
 import com.bebrik.boberclicker.data.ALL_UPGRADES
 import com.bebrik.boberclicker.data.formatScore
@@ -16,12 +17,14 @@ import com.bebrik.boberclicker.minigame.MiniGameActivity
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private val vm: GameViewModel by viewModels()
+    private lateinit var vm: GameViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        vm = ViewModelProvider(this)[GameViewModel::class.java]
 
         setupClickButton()
         setupNavigation()
@@ -35,10 +38,10 @@ class MainActivity : AppCompatActivity() {
         binding.btnBober.setOnClickListener {
             vm.onBoberClick()
             it.startAnimation(scaleDown)
-            scaleDown.setAnimationListener(object : android.view.animation.Animation.AnimationListener {
-                override fun onAnimationStart(a: android.view.animation.Animation?) {}
-                override fun onAnimationRepeat(a: android.view.animation.Animation?) {}
-                override fun onAnimationEnd(a: android.view.animation.Animation?) { it.startAnimation(scaleUp) }
+            scaleDown.setAnimationListener(object : Animation.AnimationListener {
+                override fun onAnimationStart(a: Animation?) {}
+                override fun onAnimationRepeat(a: Animation?) {}
+                override fun onAnimationEnd(a: Animation?) { it.startAnimation(scaleUp) }
             })
         }
     }
@@ -55,29 +58,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun observeState() {
         vm.state.observe(this) { state ->
-            binding.tvScore.text       = state.score.formatScore() + " 🦫"
-            binding.tvPassive.text     = "+${state.passiveIncome.formatScore()}/сек"
-            binding.tvClickPower.text  = "+${state.clickPower.formatScore()} за клик"
+            binding.tvScore.text      = state.score.formatScore() + " 🦫"
+            binding.tvPassive.text    = "+${state.passiveIncome.formatScore()}/сек"
+            binding.tvClickPower.text = "+${state.clickPower.formatScore()} за клик"
 
-            ShopAdapter.update(binding.listShop, ALL_UPGRADES, state.upgradeLevels, state.score) { id ->
-                vm.buyUpgrade(id)
-            }
-            QuestAdapter.update(binding.listQuests, state.quests) { id ->
-                vm.claimQuestReward(id)
-            }
+            ShopAdapter.update(binding.listShop, ALL_UPGRADES, state.upgradeLevels, state.score) { vm.buyUpgrade(it) }
+            QuestAdapter.update(binding.listQuests, state.quests) { vm.claimQuestReward(it) }
             AchievementAdapter.update(binding.listAchievements, state.achievements)
 
-            state.newAchievement?.let { ach ->
-                showAchievementToast("${ach.emoji} ${ach.title}")
+            state.newAchievement?.let {
+                showAchievementToast("${it.emoji} ${it.title}")
                 vm.clearNewAchievement()
             }
         }
     }
 
-    private fun showPanel(panel: View) {
-        hideAllPanels()
-        panel.visibility = View.VISIBLE
-    }
+    private fun showPanel(panel: View) { hideAllPanels(); panel.visibility = View.VISIBLE }
 
     private fun hideAllPanels() {
         binding.panelShop.visibility         = View.GONE
