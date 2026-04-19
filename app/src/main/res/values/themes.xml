@@ -1,6 +1,6 @@
 <resources>
     <style name="Theme.BoberClicker" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:windowBackground">#1c0f42</item>
+        <item name="android:windowBackground">#1C0F42</item>
         <item name="android:statusBarColor">#00000000</item>
         <item name="android:navigationBarColor">#00000000</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
