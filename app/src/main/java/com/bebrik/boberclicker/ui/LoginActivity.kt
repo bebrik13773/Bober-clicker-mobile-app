@@ -11,6 +11,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.bebrik.boberclicker.MainActivity
 import com.bebrik.boberclicker.R
+import com.bebrik.boberclicker.data.ApiClient
 import com.bebrik.boberclicker.data.GameRepository
 
 class LoginActivity : AppCompatActivity() {
@@ -30,10 +31,11 @@ class LoginActivity : AppCompatActivity() {
         }
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
+        ApiClient.activityContext = this
         buildUI()
     }
 
-    private fun buildUI() {
+        buildUI() {
         val root = FrameLayout(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,

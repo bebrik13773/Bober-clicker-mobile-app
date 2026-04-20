@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.bebrik.boberclicker.data.*
+import com.bebrik.boberclicker.data.ApiClient
 
 class ShopActivity : AppCompatActivity() {
 
@@ -26,6 +27,7 @@ class ShopActivity : AppCompatActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
 
+        ApiClient.activityContext = this
         // Subscribe to state changes
         GameRepository.onStateChanged = { runOnUiThread { refreshAll() } }
         buildUI()

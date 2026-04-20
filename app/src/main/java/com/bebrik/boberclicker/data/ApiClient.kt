@@ -1,5 +1,6 @@
 package com.bebrik.boberclicker.data
 
+import android.content.Context
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,71 +11,19 @@ import java.net.CookiePolicy
 import java.net.HttpCookie
 import java.net.HttpURLConnection
 import java.net.URL
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 object ApiClient {
     private const val TAG     = "BoberApi"
     const val BASE            = "https://bober-api.gt.tc"
     private const val TIMEOUT = 14_000
 
-    private val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL).also {
+    // java.net cookie jar — shared with ChallengeResolver
+    val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL).also {
         java.net.CookieHandler.setDefault(it)
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  AES JavaScript challenge solver
-    //
-    //  The hosting (free tier) injects a JS challenge before API calls:
-    //    var a = toNumbers("<hex>")   ← AES-128 key (16 bytes)
-    //    var b = toNumbers("<hex>")   ← IV          (16 bytes)
-    //    var c = toNumbers("<hex>")   ← ciphertext  (16 bytes)
-    //  Result: decrypt c with AES-CBC(key=a, iv=b) → set cookie _test=hex(plain)
-    //  Then redirect to original URL + ?i=1
-    // ──────────────────────────────────────────────────────────────
-
-    private var challengeSolved = false
-
-    private fun solveChallenge(html: String): Boolean {
-        if (!html.contains("slowAES") && !html.contains("_test=")) return false
-        Log.d(TAG, "AES challenge detected, solving…")
-        return try {
-            val rx = Regex("""toNumbers\(\s*"([0-9a-fA-F\s]+)"\s*\)""")
-            val matches = rx.findAll(html)
-                .map { it.groupValues[1].replace("\\s".toRegex(), "") }
-                .toList()
-            if (matches.size < 3) {
-                Log.e(TAG, "Challenge parse: only ${matches.size} groups found")
-                return false
-            }
-            val key   = hexToBytes(matches[0])
-            val iv    = hexToBytes(matches[1])
-            val ct    = hexToBytes(matches[2])
-            val cipher = Cipher.getInstance("AES/CBC/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
-            val plain  = cipher.doFinal(ct)
-            val hexVal = bytesToHex(plain)
-            Log.d(TAG, "Challenge result: _test=$hexVal")
-            val uri = URL(BASE).toURI()
-            val c = HttpCookie("_test", hexVal).apply {
-                path = "/"; domain = "bober-api.gt.tc"; maxAge = 21600
-            }
-            cookieManager.cookieStore.add(uri, c)
-            challengeSolved = true
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "solveChallenge failed", e)
-            false
-        }
-    }
-
-    private fun hexToBytes(hex: String): ByteArray {
-        val h = hex.replace("\\s".toRegex(), "")
-        return ByteArray(h.length / 2) { i -> h.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
-    }
-
-    private fun bytesToHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+    // Activity context for WebView challenge — set by BoberApp / activities
+    var activityContext: Context? = null
 
     // ──────────────────────────────────────────────────────────────
     //  Public API
@@ -104,9 +53,8 @@ object ApiClient {
         return try {
             val body = JSONObject().apply { put("login", login); put("password", password) }
             val resp = post("/api/auth/login.php", body)
-            if (!resp.optBoolean("success")) {
+            if (!resp.optBoolean("success"))
                 return LoginResult(false, resp.optString("message", "Ошибка входа"))
-            }
             LoginResult(
                 success  = true,
                 message  = resp.optString("message", ""),
@@ -114,8 +62,8 @@ object ApiClient {
                 login    = resp.optString("login", login),
                 score    = resp.optLong("score"),
                 plus     = resp.optInt("plus", 1),
-                energyMax     = resp.optInt("ENERGY_MAX", 5000),
-                energy        = resp.optDouble("energy", 5000.0).toFloat(),
+                energyMax        = resp.optInt("ENERGY_MAX", 5000),
+                energy           = resp.optDouble("energy", 5000.0).toFloat(),
                 lastEnergyUpdate = resp.optLong("lastEnergyUpdate", System.currentTimeMillis()),
                 upgrades = parseUpgrades(resp.optJSONObject("upgradePurchases")),
                 skin     = parseSkin(resp.optString("skin"))
@@ -132,7 +80,6 @@ object ApiClient {
             val acc  = resp.optJSONObject("account") ?: resp
             SyncResult(
                 success   = resp.optBoolean("success", true),
-                message   = resp.optString("message", ""),
                 score     = acc.optLong("score", state.score),
                 plus      = acc.optInt("plus", state.plus),
                 energyMax = acc.optInt("ENERGY_MAX", state.energyMax),
@@ -152,7 +99,8 @@ object ApiClient {
         return try {
             val resp = post("/api/state/sync.php", JSONObject())
             val acc  = resp.optJSONObject("account")
-            if (acc == null || acc.optInt("userId") == 0) return SyncResult(false, "Сессия истекла")
+            if (acc == null || acc.optInt("userId") == 0)
+                return SyncResult(false, "Сессия истекла")
             SyncResult(
                 success   = true,
                 score     = acc.optLong("score"),
@@ -173,7 +121,6 @@ object ApiClient {
     fun logout() {
         try { post("/api/auth/logout.php", JSONObject()) } catch (_: Exception) {}
         cookieManager.cookieStore.removeAll()
-        challengeSolved = false
     }
 
     fun restoreCookies(raw: String) {
@@ -188,7 +135,6 @@ object ApiClient {
                     cookieManager.cookieStore.add(uri, c)
                 }
             }
-            if (cookieManager.cookieStore.get(uri).any { it.name == "_test" }) challengeSolved = true
         } catch (e: Exception) { Log.w(TAG, "restoreCookies: $e") }
     }
 
@@ -198,34 +144,56 @@ object ApiClient {
     } catch (_: Exception) { "" }
 
     // ──────────────────────────────────────────────────────────────
-    //  HTTP core with auto challenge-solve + retry
+    //  HTTP core with WebView challenge auto-solve
     // ──────────────────────────────────────────────────────────────
 
+    /**
+     * POST endpoint.
+     * Если сервер вернул HTML-challenge — запускаем ChallengeResolver (WebView),
+     * ждём куку _test, потом повторяем запрос.
+     */
     private fun post(path: String, body: JSONObject): JSONObject {
         var text = rawPost("$BASE$path", body)
 
-        // Challenge page?
-        if (text.trimStart().startsWith("<") && (text.contains("slowAES") || text.contains("_test"))) {
-            val solved = solveChallenge(text)
-            if (solved) {
-                val retryPath = if (path.contains("?")) "$path&i=1" else "$path?i=1"
-                text = rawPost("$BASE$retryPath", body)
+        if (isChallengePage(text)) {
+            Log.d(TAG, "Challenge detected on $path, launching WebView resolver…")
+            val ctx = activityContext
+            if (ctx != null) {
+                val solved = ChallengeResolver.resolve(ctx, cookieManager, BASE)
+                if (solved) {
+                    // Retry — challenge should be cleared
+                    val retryPath = if (path.contains("?")) "$path&i=1" else "$path?i=1"
+                    text = rawPost("$BASE$retryPath", body)
+                    Log.d(TAG, "Retry after challenge: ${text.take(100)}")
+                }
+            } else {
+                Log.e(TAG, "activityContext is null — can't resolve challenge")
             }
         }
 
-        if (text.trimStart().startsWith("<")) {
-            Log.e(TAG, "HTML after challenge retry: ${text.take(200)}")
+        if (isChallengePage(text)) {
+            Log.e(TAG, "Still HTML after challenge resolution")
             return JSONObject().apply {
                 put("success", false)
-                put("message", "Сервер защищён — попробуйте позже")
+                put("message", "Сервер не ответил. Попробуйте позже.")
             }
         }
 
         return try {
             JSONObject(text)
         } catch (_: Exception) {
-            JSONObject().apply { put("success", false); put("message", "Неверный ответ сервера") }
+            Log.e(TAG, "Bad JSON: ${text.take(200)}")
+            JSONObject().apply { put("success", false); put("message", "Ошибка ответа сервера") }
         }
+    }
+
+    private fun isChallengePage(text: String): Boolean {
+        val t = text.trimStart()
+        return t.startsWith("<") && (
+            t.contains("slowAES") ||
+            t.contains("_test=") ||
+            t.contains("aes.js")
+        )
     }
 
     private fun rawPost(url: String, body: JSONObject): String {
@@ -243,11 +211,7 @@ object ApiClient {
         conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code   = conn.responseCode
         val stream = if (code in 200..399) conn.inputStream else (conn.errorStream ?: conn.inputStream)
-        val text = if (stream != null) {
-            BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-        } else {
-            ""
-        }
+        val text   = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
         conn.disconnect()
         Log.d(TAG, "POST $url → $code | ${text.take(160)}")
         return text
@@ -267,15 +231,15 @@ object ApiClient {
         put("energy", s.energy.toInt()); put("lastEnergyUpdate", s.lastEnergyUpdate)
         put("ENERGY_MAX", s.energyMax)
         put("upgradePurchases", JSONObject().apply {
-            put("tapSmall", u.tapSmall); put("tapBig", u.tapBig)
-            put("energy", u.energy);    put("tapHuge", u.tapHuge)
+            put("tapSmall",   u.tapSmall);   put("tapBig",     u.tapBig)
+            put("energy",     u.energy);     put("tapHuge",    u.tapHuge)
             put("regenBoost", u.regenBoost); put("energyHuge", u.energyHuge)
         })
     }
 
     private fun parseUpgrades(j: JSONObject?) = if (j == null) UpgradeCounts() else UpgradeCounts(
         tapSmall   = j.optInt("tapSmall"),   tapBig     = j.optInt("tapBig"),
-        energy     = j.optInt("energy"),      tapHuge    = j.optInt("tapHuge"),
+        energy     = j.optInt("energy"),     tapHuge    = j.optInt("tapHuge"),
         regenBoost = j.optInt("regenBoost"), energyHuge = j.optInt("energyHuge")
     )
 

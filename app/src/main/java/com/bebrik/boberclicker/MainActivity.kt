@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.bebrik.boberclicker.data.*
+import com.bebrik.boberclicker.data.ApiClient
 import com.bebrik.boberclicker.ui.LoginActivity
 import com.bebrik.boberclicker.ui.ShopActivity
 
@@ -55,6 +56,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        ApiClient.activityContext = this
         buildUI()
         setupCallbacks()
         handler.post(energyRunnable)
@@ -66,7 +68,7 @@ class MainActivity : AppCompatActivity() {
 
     // =============== UI BUILD ===============
 
-    private fun buildUI() {
+        buildUI() {
         val root = FrameLayout(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
