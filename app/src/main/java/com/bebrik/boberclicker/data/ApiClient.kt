@@ -10,6 +10,10 @@ import java.net.CookiePolicy
 import java.net.HttpCookie
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.regex.Pattern
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 object ApiClient {
     private const val TAG = "BoberApi"
@@ -229,9 +233,27 @@ object ApiClient {
     }
 
     private fun post(path: String, body: JSONObject): JSONObject {
+        val first = performPost(path, body)
+        if (looksLikeJsChallenge(first.text)) {
+            val solved = trySolveJsChallenge(first.text)
+            if (solved) {
+                Log.d(TAG, "JS challenge solved, retrying POST $path")
+                val second = performPost(path, body)
+                return parseJsonResponse(second.text)
+            }
+            return JSONObject().apply {
+                put("success", false)
+                put("message", "Ошибка входа: антибот-защита сервера не пройдена")
+            }
+        }
+        return parseJsonResponse(first.text)
+    }
+
+    private data class HttpTextResponse(val code: Int, val text: String)
+
+    private fun performPost(path: String, body: JSONObject): HttpTextResponse {
         val url = URL("$BASE$path")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.apply {
+        val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = TIMEOUT
             readTimeout = TIMEOUT
@@ -240,17 +262,98 @@ object ApiClient {
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "BoberClickerApp/3.0")
         }
-        val bytes = body.toString().toByteArray(Charsets.UTF_8)
-        conn.outputStream.use { it.write(bytes) }
-
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
         conn.disconnect()
-
         Log.d(TAG, "POST $path -> $code | ${text.take(300)}")
-        return try { JSONObject(text) } catch (_: Exception) {
+        return HttpTextResponse(code, text)
+    }
+
+    private fun parseJsonResponse(text: String): JSONObject {
+        return try {
+            JSONObject(text)
+        } catch (_: Exception) {
             JSONObject().apply { put("success", false); put("message", "Плохой ответ сервера: $text") }
         }
+    }
+
+    private fun looksLikeJsChallenge(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("slowaes.decrypt") && lower.contains("document.cookie") && lower.contains("/aes.js")
+    }
+
+    private fun trySolveJsChallenge(html: String): Boolean {
+        return try {
+            val aHex = extractChallengeHex(html, "a")
+            val bHex = extractChallengeHex(html, "b")
+            val cHex = extractChallengeHex(html, "c")
+            if (aHex.isEmpty() || bHex.isEmpty() || cHex.isEmpty()) return false
+
+            val decrypted = decryptAesCbcNoPadding(hexToBytes(cHex), hexToBytes(aHex), hexToBytes(bHex))
+            val cookieValue = bytesToHex(decrypted)
+            val uri = URL(BASE).toURI()
+            val cookie = HttpCookie("_test", cookieValue).apply {
+                path = "/"
+                domain = "bober-api.gt.tc"
+                maxAge = 21600
+            }
+            cookieManager.cookieStore.add(uri, cookie)
+
+            val redirectUrl = extractRedirectUrl(html) ?: "$BASE/api/auth/login.php?i=1"
+            val conn = (URL(redirectUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = TIMEOUT
+                readTimeout = TIMEOUT
+                setRequestProperty("User-Agent", "BoberClickerApp/3.0")
+            }
+            val code = conn.responseCode
+            conn.inputStream?.close()
+            conn.errorStream?.close()
+            conn.disconnect()
+            Log.d(TAG, "JS challenge handshake -> $code")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to solve JS challenge", e)
+            false
+        }
+    }
+
+    private fun extractChallengeHex(html: String, variable: String): String {
+        val regex = Regex("""\b$variable\s*=\s*toNumbers\("([0-9a-fA-F\s]+)"\)""")
+        val raw = regex.find(html)?.groupValues?.getOrNull(1) ?: return ""
+        return raw.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
+    }
+
+    private fun extractRedirectUrl(html: String): String? {
+        val p = Pattern.compile("location\\.href\\s*=\\s*\"([^\"]+)\"")
+        val m = p.matcher(html)
+        return if (m.find()) m.group(1) else null
+    }
+
+    private fun decryptAesCbcNoPadding(cipherText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/CBC/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+        return cipher.doFinal(cipherText)
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val clean = hex.trim()
+        require(clean.length % 2 == 0) { "Invalid hex length: ${clean.length}" }
+        return ByteArray(clean.length / 2) { i ->
+            clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
+    }
+
+    private fun bytesToHex(bytes: ByteArray): String {
+        val hexChars = "0123456789abcdef".toCharArray()
+        val out = CharArray(bytes.size * 2)
+        for (i in bytes.indices) {
+            val v = bytes[i].toInt() and 0xFF
+            out[i * 2] = hexChars[v ushr 4]
+            out[i * 2 + 1] = hexChars[v and 0x0F]
+        }
+        return String(out)
     }
 }
