@@ -21,6 +21,7 @@ object ApiClient {
     val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL).also {
         java.net.CookieHandler.setDefault(it)
     }
+    @Volatile private var lastDebugLog: String = ""
 
     // Activity context for WebView challenge — set by BoberApp / activities
     var activityContext: Context? = null
@@ -143,6 +144,8 @@ object ApiClient {
         cookieManager.cookieStore.get(uri).joinToString("; ") { "${it.name}=${it.value}" }
     } catch (_: Exception) { "" }
 
+    fun getLastDebugLog(): String = lastDebugLog
+
     // ──────────────────────────────────────────────────────────────
     //  HTTP core with WebView challenge auto-solve
     // ──────────────────────────────────────────────────────────────
@@ -156,6 +159,7 @@ object ApiClient {
         var text = rawPost("$BASE$path", body)
 
         if (isChallengePage(text)) {
+            appendDebug("JS challenge detected on $path")
             Log.d(TAG, "Challenge detected on $path, launching WebView resolver…")
             val ctx = activityContext
             if (ctx != null) {
@@ -182,6 +186,7 @@ object ApiClient {
         return try {
             JSONObject(text)
         } catch (_: Exception) {
+            appendDebug("JSON parse failed. Raw response kept.")
             Log.e(TAG, "Bad JSON: ${text.take(200)}")
             JSONObject().apply { put("success", false); put("message", "Ошибка ответа сервера") }
         }
@@ -211,10 +216,27 @@ object ApiClient {
         conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code   = conn.responseCode
         val stream = if (code in 200..399) conn.inputStream else (conn.errorStream ?: conn.inputStream)
-        val text   = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        val text = if (stream != null) {
+            BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        } else {
+            ""
+        }
+        lastDebugLog = buildString {
+            appendLine("=== API DEBUG ===")
+            appendLine("URL: $url")
+            appendLine("METHOD: POST")
+            appendLine("STATUS: $code")
+            appendLine("REQUEST: ${body.toString()}")
+            appendLine("RESPONSE:")
+            appendLine(text)
+        }
         conn.disconnect()
         Log.d(TAG, "POST $url → $code | ${text.take(160)}")
         return text
+    }
+
+    private fun appendDebug(line: String) {
+        lastDebugLog = if (lastDebugLog.isBlank()) line else "$lastDebugLog\n$line"
     }
 
     // ──────────────────────────────────────────────────────────────

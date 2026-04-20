@@ -1,6 +1,8 @@
 package com.bebrik.boberclicker.data
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.util.Log
 import kotlinx.coroutines.*
 import org.json.JSONArray
@@ -82,6 +84,7 @@ object GameRepository {
                     callback(true, res.message)
                 }
             } else {
+                copyErrorDebugToClipboard(ctx, "ЛОГИН")
                 withContext(Dispatchers.Main) { callback(false, res.message) }
             }
         }
@@ -108,6 +111,7 @@ object GameRepository {
                 // Session expired or no network — use local data
                 isOnline = res.message.contains("сети", ignoreCase = true) ||
                            res.message.contains("network", ignoreCase = true)
+                copyErrorDebugToClipboard(ctx, "RESTORE_SESSION")
                 withContext(Dispatchers.Main) {
                     onSyncStatusChanged?.invoke(isOnline, res.message)
                     callback(false)
@@ -197,6 +201,7 @@ object GameRepository {
                 }
             } else {
                 isOnline = false
+                copyErrorDebugToClipboard(ctx, "SYNC")
                 withContext(Dispatchers.Main) {
                     onSyncStatusChanged?.invoke(false, "Нет сети — используем локальные данные")
                 }
@@ -204,9 +209,27 @@ object GameRepository {
         } catch (e: Exception) {
             isOnline = false
             Log.e(TAG, "sync failed", e)
+            copyErrorDebugToClipboard(ctx, "SYNC_EXCEPTION", e)
             withContext(Dispatchers.Main) {
                 onSyncStatusChanged?.invoke(false, "Нет сети — используем локальные данные")
             }
+        }
+    }
+
+    private fun copyErrorDebugToClipboard(ctx: Context, source: String, throwable: Throwable? = null) {
+        runCatching {
+            val debug = buildString {
+                appendLine("=== BOBER ERROR LOG ===")
+                appendLine("SOURCE: $source")
+                appendLine("TIME: ${System.currentTimeMillis()}")
+                throwable?.let { appendLine("EXCEPTION: ${it.javaClass.simpleName}: ${it.message}") }
+                appendLine()
+                appendLine(ApiClient.getLastDebugLog())
+            }.trim()
+            val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+            clipboard.setPrimaryClip(ClipData.newPlainText("bober_error_log", debug))
+        }.onFailure {
+            Log.w(TAG, "Failed to copy debug log to clipboard: ${it.message}")
         }
     }
 
