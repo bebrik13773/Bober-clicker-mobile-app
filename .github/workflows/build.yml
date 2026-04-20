@@ -48,8 +48,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ steps.version.outputs.date }}-${{ steps.version.outputs.sha }}
-          name: "🦫 Bober Clicker ${{ steps.version.outputs.date }}"
+          tag_name: latest
+          name: "🦫 Bober Clicker latest (${{ steps.version.outputs.date }})"
           body: |
             Автоматическая сборка из ветки `main`
             Коммит: `${{ github.sha }}`
