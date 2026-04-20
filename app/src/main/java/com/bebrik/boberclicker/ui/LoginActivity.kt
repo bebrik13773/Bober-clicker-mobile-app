@@ -238,7 +238,7 @@ class LoginActivity : AppCompatActivity() {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 })
             } else {
-                showStatus(message, false)
+                showStatus("$message\n(Полный лог скопирован в буфер)", false)
             }
         }
     }
