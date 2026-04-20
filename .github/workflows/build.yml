@@ -45,11 +45,18 @@ jobs:
           echo "date=$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
           echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
-      - name: Create Release
+      - name: Delete old latest release
+        run: |
+          gh release delete latest --yes 2>/dev/null || true
+          git push --delete origin latest 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create latest Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "🦫 Bober Clicker latest (${{ steps.version.outputs.date }})"
+          name: "🦫 Bober Clicker — последняя сборка (${{ steps.version.outputs.date }})"
           body: |
             Автоматическая сборка из ветки `main`
             Коммит: `${{ github.sha }}`

@@ -10,43 +10,90 @@ import java.net.CookiePolicy
 import java.net.HttpCookie
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.regex.Pattern
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object ApiClient {
-    private const val TAG = "BoberApi"
-    const val BASE = "https://bober-api.gt.tc"
-    private const val TIMEOUT = 12_000
+    private const val TAG     = "BoberApi"
+    const val BASE            = "https://bober-api.gt.tc"
+    private const val TIMEOUT = 14_000
 
     private val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL).also {
         java.net.CookieHandler.setDefault(it)
     }
 
-    // ----- PUBLIC API -----
+    // ──────────────────────────────────────────────────────────────
+    //  AES JavaScript challenge solver
+    //
+    //  The hosting (free tier) injects a JS challenge before API calls:
+    //    var a = toNumbers("<hex>")   ← AES-128 key (16 bytes)
+    //    var b = toNumbers("<hex>")   ← IV          (16 bytes)
+    //    var c = toNumbers("<hex>")   ← ciphertext  (16 bytes)
+    //  Result: decrypt c with AES-CBC(key=a, iv=b) → set cookie _test=hex(plain)
+    //  Then redirect to original URL + ?i=1
+    // ──────────────────────────────────────────────────────────────
+
+    private var challengeSolved = false
+
+    private fun solveChallenge(html: String): Boolean {
+        if (!html.contains("slowAES") && !html.contains("_test=")) return false
+        Log.d(TAG, "AES challenge detected, solving…")
+        return try {
+            val rx = Regex("""toNumbers\(\s*"([0-9a-fA-F\s]+)"\s*\)""")
+            val matches = rx.findAll(html)
+                .map { it.groupValues[1].replace("\\s".toRegex(), "") }
+                .toList()
+            if (matches.size < 3) {
+                Log.e(TAG, "Challenge parse: only ${matches.size} groups found")
+                return false
+            }
+            val key   = hexToBytes(matches[0])
+            val iv    = hexToBytes(matches[1])
+            val ct    = hexToBytes(matches[2])
+            val cipher = Cipher.getInstance("AES/CBC/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+            val plain  = cipher.doFinal(ct)
+            val hexVal = bytesToHex(plain)
+            Log.d(TAG, "Challenge result: _test=$hexVal")
+            val uri = URL(BASE).toURI()
+            val c = HttpCookie("_test", hexVal).apply {
+                path = "/"; domain = "bober-api.gt.tc"; maxAge = 21600
+            }
+            cookieManager.cookieStore.add(uri, c)
+            challengeSolved = true
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "solveChallenge failed", e)
+            false
+        }
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val h = hex.replace("\\s".toRegex(), "")
+        return ByteArray(h.length / 2) { i -> h.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+    }
+
+    private fun bytesToHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Public API
+    // ──────────────────────────────────────────────────────────────
 
     data class LoginResult(
-        val success: Boolean,
-        val message: String,
-        val userId: Int = 0,
-        val login: String = "",
-        val score: Long = 0,
-        val plus: Int = 1,
-        val energyMax: Int = 5000,
-        val energy: Float = 5000f,
+        val success: Boolean, val message: String,
+        val userId: Int = 0, val login: String = "",
+        val score: Long = 0, val plus: Int = 1,
+        val energyMax: Int = 5000, val energy: Float = 5000f,
         val lastEnergyUpdate: Long = System.currentTimeMillis(),
         val upgrades: UpgradeCounts = UpgradeCounts(),
         val skin: SkinState = SkinState()
     )
 
     data class SyncResult(
-        val success: Boolean,
-        val message: String = "",
-        val score: Long = 0,
-        val plus: Int = 1,
-        val energyMax: Int = 5000,
-        val energy: Float = 5000f,
+        val success: Boolean, val message: String = "",
+        val score: Long = 0, val plus: Int = 1,
+        val energyMax: Int = 5000, val energy: Float = 5000f,
         val lastEnergyUpdate: Long = System.currentTimeMillis(),
         val upgrades: UpgradeCounts = UpgradeCounts(),
         val skin: SkinState = SkinState(),
@@ -55,23 +102,20 @@ object ApiClient {
 
     fun login(login: String, password: String): LoginResult {
         return try {
-            val body = JSONObject().apply {
-                put("login", login)
-                put("password", password)
-            }
+            val body = JSONObject().apply { put("login", login); put("password", password) }
             val resp = post("/api/auth/login.php", body)
             if (!resp.optBoolean("success")) {
                 return LoginResult(false, resp.optString("message", "Ошибка входа"))
             }
             LoginResult(
-                success = true,
-                message = resp.optString("message", ""),
-                userId = resp.optInt("userId"),
-                login  = resp.optString("login", login),
-                score  = resp.optLong("score"),
-                plus   = resp.optInt("plus", 1),
-                energyMax = resp.optInt("ENERGY_MAX", 5000),
-                energy    = resp.optDouble("energy", 5000.0).toFloat(),
+                success  = true,
+                message  = resp.optString("message", ""),
+                userId   = resp.optInt("userId"),
+                login    = resp.optString("login", login),
+                score    = resp.optLong("score"),
+                plus     = resp.optInt("plus", 1),
+                energyMax     = resp.optInt("ENERGY_MAX", 5000),
+                energy        = resp.optDouble("energy", 5000.0).toFloat(),
                 lastEnergyUpdate = resp.optLong("lastEnergyUpdate", System.currentTimeMillis()),
                 upgrades = parseUpgrades(resp.optJSONObject("upgradePurchases")),
                 skin     = parseSkin(resp.optString("skin"))
@@ -82,50 +126,42 @@ object ApiClient {
         }
     }
 
-    /** Full sync: sends current state, receives server state + leaderboard */
     fun sync(userId: Int, state: GameState): SyncResult {
         return try {
-            val body = buildSavePayload(userId, state)
-            val resp = post("/api/state/sync.php", body)
-
-            val acc = resp.optJSONObject("account") ?: resp
-            val lb  = parseLeaderboard(resp.optJSONObject("leaderboards"))
-
+            val resp = post("/api/state/sync.php", buildSavePayload(userId, state))
+            val acc  = resp.optJSONObject("account") ?: resp
             SyncResult(
-                success  = resp.optBoolean("success", true),
-                message  = resp.optString("message", ""),
-                score    = acc.optLong("score", state.score),
-                plus     = acc.optInt("plus", state.plus),
+                success   = resp.optBoolean("success", true),
+                message   = resp.optString("message", ""),
+                score     = acc.optLong("score", state.score),
+                plus      = acc.optInt("plus", state.plus),
                 energyMax = acc.optInt("ENERGY_MAX", state.energyMax),
                 energy    = acc.optDouble("energy", state.energy.toDouble()).toFloat(),
                 lastEnergyUpdate = acc.optLong("lastEnergyUpdate", System.currentTimeMillis()),
-                upgrades = parseUpgrades(acc.optJSONObject("upgradePurchases")) ,
-                skin     = parseSkin(acc.optString("skin", "")),
-                leaderboard = lb
+                upgrades  = parseUpgrades(acc.optJSONObject("upgradePurchases")),
+                skin      = parseSkin(acc.optString("skin", "")),
+                leaderboard = parseLeaderboard(resp.optJSONObject("leaderboards"))
             )
         } catch (e: Exception) {
             Log.e(TAG, "sync error", e)
-            SyncResult(false, "Ошибка сети: ${e.message}")
+            SyncResult(false, "Нет сети: ${e.message}")
         }
     }
 
-    /** Restore session: call sync with userId=0 to check if cookie still valid */
     fun restoreSession(): SyncResult {
         return try {
             val resp = post("/api/state/sync.php", JSONObject())
-            val acc = resp.optJSONObject("account")
-            if (acc == null || acc.optInt("userId") == 0) {
-                return SyncResult(false, "Сессия истекла")
-            }
+            val acc  = resp.optJSONObject("account")
+            if (acc == null || acc.optInt("userId") == 0) return SyncResult(false, "Сессия истекла")
             SyncResult(
-                success  = true,
-                score    = acc.optLong("score"),
-                plus     = acc.optInt("plus", 1),
+                success   = true,
+                score     = acc.optLong("score"),
+                plus      = acc.optInt("plus", 1),
                 energyMax = acc.optInt("ENERGY_MAX", 5000),
                 energy    = acc.optDouble("energy", 5000.0).toFloat(),
                 lastEnergyUpdate = acc.optLong("lastEnergyUpdate", System.currentTimeMillis()),
-                upgrades = parseUpgrades(acc.optJSONObject("upgradePurchases")),
-                skin     = parseSkin(acc.optString("skin", "")),
+                upgrades  = parseUpgrades(acc.optJSONObject("upgradePurchases")),
+                skin      = parseSkin(acc.optString("skin", "")),
                 leaderboard = parseLeaderboard(resp.optJSONObject("leaderboards"))
             )
         } catch (e: Exception) {
@@ -137,223 +173,126 @@ object ApiClient {
     fun logout() {
         try { post("/api/auth/logout.php", JSONObject()) } catch (_: Exception) {}
         cookieManager.cookieStore.removeAll()
+        challengeSolved = false
     }
 
     fun restoreCookies(raw: String) {
         if (raw.isBlank()) return
         try {
             val uri = URL(BASE).toURI()
-            raw.split(";").forEach { part ->
-                val kv = part.trim()
-                if (kv.contains("=")) {
-                    val cookie = HttpCookie(kv.substringBefore("=").trim(), kv.substringAfter("=").trim())
-                    cookie.path = "/"
-                    cookie.domain = "bober-api.gt.tc"
-                    cookieManager.cookieStore.add(uri, cookie)
+            raw.split(";").map { it.trim() }.filter { it.contains("=") }.forEach { part ->
+                val name  = part.substringBefore("=").trim()
+                val value = part.substringAfter("=").trim()
+                if (name.isNotEmpty()) {
+                    val c = HttpCookie(name, value).apply { path = "/"; domain = "bober-api.gt.tc" }
+                    cookieManager.cookieStore.add(uri, c)
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "restoreCookies: $e")
-        }
+            if (cookieManager.cookieStore.get(uri).any { it.name == "_test" }) challengeSolved = true
+        } catch (e: Exception) { Log.w(TAG, "restoreCookies: $e") }
     }
 
-    fun exportCookies(): String {
+    fun exportCookies(): String = try {
+        val uri = URL(BASE).toURI()
+        cookieManager.cookieStore.get(uri).joinToString("; ") { "${it.name}=${it.value}" }
+    } catch (_: Exception) { "" }
+
+    // ──────────────────────────────────────────────────────────────
+    //  HTTP core with auto challenge-solve + retry
+    // ──────────────────────────────────────────────────────────────
+
+    private fun post(path: String, body: JSONObject): JSONObject {
+        var text = rawPost("$BASE$path", body)
+
+        // Challenge page?
+        if (text.trimStart().startsWith("<") && (text.contains("slowAES") || text.contains("_test"))) {
+            val solved = solveChallenge(text)
+            if (solved) {
+                val retryPath = if (path.contains("?")) "$path&i=1" else "$path?i=1"
+                text = rawPost("$BASE$retryPath", body)
+            }
+        }
+
+        if (text.trimStart().startsWith("<")) {
+            Log.e(TAG, "HTML after challenge retry: ${text.take(200)}")
+            return JSONObject().apply {
+                put("success", false)
+                put("message", "Сервер защищён — попробуйте позже")
+            }
+        }
+
         return try {
-            val uri = URL(BASE).toURI()
-            cookieManager.cookieStore.get(uri).joinToString("; ") { "${it.name}=${it.value}" }
-        } catch (_: Exception) { "" }
-    }
-
-    // ----- HELPERS -----
-
-    private fun buildSavePayload(userId: Int, s: GameState): JSONObject {
-        val u = s.upgrades
-        return JSONObject().apply {
-            put("userId", userId)
-            put("score", s.score)
-            put("plus", s.plus)
-            put("skin", JSONObject().apply {
-                put("equippedSkinId", s.skin.equippedSkinId)
-                put("ownedSkinIds", JSONArray(s.skin.ownedSkinIds))
-            }.toString())
-            put("energy", s.energy.toInt())
-            put("lastEnergyUpdate", s.lastEnergyUpdate)
-            put("ENERGY_MAX", s.energyMax)
-            put("upgradePurchases", JSONObject().apply {
-                put("tapSmall",   u.tapSmall)
-                put("tapBig",     u.tapBig)
-                put("energy",     u.energy)
-                put("tapHuge",    u.tapHuge)
-                put("regenBoost", u.regenBoost)
-                put("energyHuge", u.energyHuge)
-            })
+            JSONObject(text)
+        } catch (_: Exception) {
+            JSONObject().apply { put("success", false); put("message", "Неверный ответ сервера") }
         }
     }
 
-    private fun parseUpgrades(j: JSONObject?): UpgradeCounts {
-        if (j == null) return UpgradeCounts()
-        return UpgradeCounts(
-            tapSmall   = j.optInt("tapSmall"),
-            tapBig     = j.optInt("tapBig"),
-            energy     = j.optInt("energy"),
-            tapHuge    = j.optInt("tapHuge"),
-            regenBoost = j.optInt("regenBoost"),
-            energyHuge = j.optInt("energyHuge")
-        )
+    private fun rawPost(url: String, body: JSONObject): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.apply {
+            requestMethod  = "POST"
+            connectTimeout = TIMEOUT
+            readTimeout    = TIMEOUT
+            doOutput       = true
+            setRequestProperty("Content-Type",      "application/json")
+            setRequestProperty("Accept",            "application/json, text/html")
+            setRequestProperty("User-Agent",        "BoberClickerApp/4.0 Android")
+            setRequestProperty("X-Requested-With",  "XMLHttpRequest")
+        }
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+        val code   = conn.responseCode
+        val stream = if (code in 200..399) conn.inputStream else (conn.errorStream ?: conn.inputStream)
+        val text   = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        conn.disconnect()
+        Log.d(TAG, "POST $url → $code | ${text.take(160)}")
+        return text
     }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Parsers
+    // ──────────────────────────────────────────────────────────────
+
+    private fun buildSavePayload(userId: Int, s: GameState) = JSONObject().apply {
+        val u = s.upgrades
+        put("userId", userId); put("score", s.score); put("plus", s.plus)
+        put("skin", JSONObject().apply {
+            put("equippedSkinId", s.skin.equippedSkinId)
+            put("ownedSkinIds", JSONArray(s.skin.ownedSkinIds))
+        }.toString())
+        put("energy", s.energy.toInt()); put("lastEnergyUpdate", s.lastEnergyUpdate)
+        put("ENERGY_MAX", s.energyMax)
+        put("upgradePurchases", JSONObject().apply {
+            put("tapSmall", u.tapSmall); put("tapBig", u.tapBig)
+            put("energy", u.energy);    put("tapHuge", u.tapHuge)
+            put("regenBoost", u.regenBoost); put("energyHuge", u.energyHuge)
+        })
+    }
+
+    private fun parseUpgrades(j: JSONObject?) = if (j == null) UpgradeCounts() else UpgradeCounts(
+        tapSmall   = j.optInt("tapSmall"),   tapBig     = j.optInt("tapBig"),
+        energy     = j.optInt("energy"),      tapHuge    = j.optInt("tapHuge"),
+        regenBoost = j.optInt("regenBoost"), energyHuge = j.optInt("energyHuge")
+    )
 
     private fun parseSkin(raw: String): SkinState {
-        if (raw.isBlank()) return SkinState()
+        if (raw.isBlank() || raw == "null") return SkinState()
         return try {
-            val j = JSONObject(raw)
+            val j   = JSONObject(raw)
             val arr = j.optJSONArray("ownedSkinIds")
             val owned = mutableListOf<String>()
             if (arr != null) for (i in 0 until arr.length()) owned.add(arr.getString(i))
             if (owned.isEmpty()) owned.addAll(listOf("classic", "standard"))
-            SkinState(
-                equippedSkinId = j.optString("equippedSkinId", "classic"),
-                ownedSkinIds = owned
-            )
+            SkinState(equippedSkinId = j.optString("equippedSkinId", "classic"), ownedSkinIds = owned)
         } catch (_: Exception) { SkinState() }
     }
 
     private fun parseLeaderboard(j: JSONObject?): List<LeaderboardEntry> {
-        if (j == null) return emptyList()
-        val arr = j.optJSONArray("main") ?: return emptyList()
-        val list = mutableListOf<LeaderboardEntry>()
-        for (i in 0 until minOf(arr.length(), 3)) {
-            val e = arr.getJSONObject(i)
-            list.add(LeaderboardEntry(
-                login  = e.optString("login", "?"),
-                score  = e.optLong("score"),
-                userId = e.optInt("userId")
-            ))
-        }
-        return list
-    }
-
-    private fun post(path: String, body: JSONObject): JSONObject {
-        val first = performPost(path, body)
-        if (looksLikeJsChallenge(first.text)) {
-            val solved = trySolveJsChallenge(first.text)
-            if (solved) {
-                Log.d(TAG, "JS challenge solved, retrying POST $path")
-                val second = performPost(path, body)
-                return parseJsonResponse(second.text)
-            }
-            return JSONObject().apply {
-                put("success", false)
-                put("message", "Ошибка входа: антибот-защита сервера не пройдена")
+        val arr = j?.optJSONArray("main") ?: return emptyList()
+        return (0 until minOf(arr.length(), 3)).map { i ->
+            arr.getJSONObject(i).let { e ->
+                LeaderboardEntry(e.optString("login", "?"), e.optLong("score"), e.optInt("userId"))
             }
         }
-        return parseJsonResponse(first.text)
-    }
-
-    private data class HttpTextResponse(val code: Int, val text: String)
-
-    private fun performPost(path: String, body: JSONObject): HttpTextResponse {
-        val url = URL("$BASE$path")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = TIMEOUT
-            readTimeout = TIMEOUT
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "BoberClickerApp/3.0")
-        }
-        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val text = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-        conn.disconnect()
-        Log.d(TAG, "POST $path -> $code | ${text.take(300)}")
-        return HttpTextResponse(code, text)
-    }
-
-    private fun parseJsonResponse(text: String): JSONObject {
-        return try {
-            JSONObject(text)
-        } catch (_: Exception) {
-            JSONObject().apply { put("success", false); put("message", "Плохой ответ сервера: $text") }
-        }
-    }
-
-    private fun looksLikeJsChallenge(text: String): Boolean {
-        val lower = text.lowercase()
-        return lower.contains("slowaes.decrypt") && lower.contains("document.cookie") && lower.contains("/aes.js")
-    }
-
-    private fun trySolveJsChallenge(html: String): Boolean {
-        return try {
-            val aHex = extractChallengeHex(html, "a")
-            val bHex = extractChallengeHex(html, "b")
-            val cHex = extractChallengeHex(html, "c")
-            if (aHex.isEmpty() || bHex.isEmpty() || cHex.isEmpty()) return false
-
-            val decrypted = decryptAesCbcNoPadding(hexToBytes(cHex), hexToBytes(aHex), hexToBytes(bHex))
-            val cookieValue = bytesToHex(decrypted)
-            val uri = URL(BASE).toURI()
-            val cookie = HttpCookie("_test", cookieValue).apply {
-                path = "/"
-                domain = "bober-api.gt.tc"
-                maxAge = 21600
-            }
-            cookieManager.cookieStore.add(uri, cookie)
-
-            val redirectUrl = extractRedirectUrl(html) ?: "$BASE/api/auth/login.php?i=1"
-            val conn = (URL(redirectUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = TIMEOUT
-                readTimeout = TIMEOUT
-                setRequestProperty("User-Agent", "BoberClickerApp/3.0")
-            }
-            val code = conn.responseCode
-            conn.inputStream?.close()
-            conn.errorStream?.close()
-            conn.disconnect()
-            Log.d(TAG, "JS challenge handshake -> $code")
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to solve JS challenge", e)
-            false
-        }
-    }
-
-    private fun extractChallengeHex(html: String, variable: String): String {
-        val regex = Regex("""\b$variable\s*=\s*toNumbers\("([0-9a-fA-F\s]+)"\)""")
-        val raw = regex.find(html)?.groupValues?.getOrNull(1) ?: return ""
-        return raw.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
-    }
-
-    private fun extractRedirectUrl(html: String): String? {
-        val p = Pattern.compile("location\\.href\\s*=\\s*\"([^\"]+)\"")
-        val m = p.matcher(html)
-        return if (m.find()) m.group(1) else null
-    }
-
-    private fun decryptAesCbcNoPadding(cipherText: ByteArray, key: ByteArray, iv: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance("AES/CBC/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
-        return cipher.doFinal(cipherText)
-    }
-
-    private fun hexToBytes(hex: String): ByteArray {
-        val clean = hex.trim()
-        require(clean.length % 2 == 0) { "Invalid hex length: ${clean.length}" }
-        return ByteArray(clean.length / 2) { i ->
-            clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-        }
-    }
-
-    private fun bytesToHex(bytes: ByteArray): String {
-        val hexChars = "0123456789abcdef".toCharArray()
-        val out = CharArray(bytes.size * 2)
-        for (i in bytes.indices) {
-            val v = bytes[i].toInt() and 0xFF
-            out[i * 2] = hexChars[v ushr 4]
-            out[i * 2 + 1] = hexChars[v and 0x0F]
-        }
-        return String(out)
     }
 }
