@@ -1,22 +1,18 @@
 package com.bebrik.boberclicker.ui
 
 import android.animation.ObjectAnimator
-import android.content.Context
 import android.graphics.*
 import android.graphics.drawable.*
-import android.os.*
+import android.os.Bundle
 import android.view.*
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.ViewModelProvider
 import com.bebrik.boberclicker.data.*
-import com.bebrik.boberclicker.game.GameViewModel
 
 class ShopActivity : AppCompatActivity() {
 
-    private lateinit var vm: GameViewModel
     private lateinit var tvBalance: TextView
     private lateinit var upgradeContainer: LinearLayout
     private lateinit var skinContainer: LinearLayout
@@ -25,126 +21,90 @@ class ShopActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = false
-            isAppearanceLightNavigationBars = false
+            isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false
         }
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
 
-        vm = ViewModelProvider(this)[GameViewModel::class.java]
-
+        // Subscribe to state changes
+        GameRepository.onStateChanged = { runOnUiThread { refreshAll() } }
         buildUI()
-        setupObservers()
     }
 
     private fun buildUI() {
         val root = FrameLayout(this).apply {
-            background = createPurpleGradient()
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.parseColor("#6B11D7"), Color.parseColor("#45118A"), Color.parseColor("#1C0F42"))
+            )
         }
-
-        val scroll = ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-        }
-
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(16), dp(56), dp(16), dp(32))
+            setPadding(dp(16), dp(52), dp(16), dp(32))
         }
 
-        // Back button + Title
-        val header = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(52))
-        }
-        val btnBack = TextView(this).apply {
-            text = "← Назад"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
+        // Header
+        val header = FrameLayout(this).apply { layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(52)) }
+        header.addView(TextView(this).apply {
+            text = "← Назад"; textSize = 15f; typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#7EF1FF"))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Color.parseColor("#22FFFFFF"))
-            }
+            background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.parseColor("#22FFFFFF")) }
             setPadding(dp(14), dp(8), dp(14), dp(8))
-            layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-                gravity = Gravity.CENTER_VERTICAL or Gravity.START
-            }
+            layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.START }
             setOnClickListener { finish() }
-        }
-        header.addView(btnBack)
-        val titleTv = TextView(this).apply {
-            text = "Магазин"
-            textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-                gravity = Gravity.CENTER
-            }
-        }
-        header.addView(titleTv)
-        content.addView(header)
-        content.addView(spacer(12))
+        })
+        header.addView(TextView(this).apply {
+            text = "Магазин"; textSize = 20f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+            layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { gravity = Gravity.CENTER }
+        })
+        content.addView(header); content.addView(spacer(12))
 
-        // Balance card
-        val balCard = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        // Balance
+        val balRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
-                setColor(Color.parseColor("#1E0A44"))
-                setStroke(dp(1), Color.parseColor("#337EF1FF"))
-            }
+            background = GradientDrawable().apply { cornerRadius = dp(18).toFloat(); setColor(Color.parseColor("#1E0A44")); setStroke(dp(1), Color.parseColor("#337EF1FF")) }
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
-        tvBalance = TextView(this).apply {
-            textSize = 22f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-        }
-        balCard.addView(TextView(this).apply {
-            text = "💰 Баланс: "
-            textSize = 22f
-            setTextColor(Color.parseColor("#C9FFFF"))
-        })
-        balCard.addView(tvBalance)
-        content.addView(balCard)
-        content.addView(spacer(20))
+        balRow.addView(tv("💰 Баланс: ", 22f, Color.parseColor("#C9FFFF")))
+        tvBalance = tv("0", 22f, Color.WHITE, Typeface.DEFAULT_BOLD)
+        balRow.addView(tvBalance)
+        content.addView(balRow); content.addView(spacer(20))
 
-        // Upgrades section
-        content.addView(makeSectionTitle("⬆️  Улучшения"))
-        content.addView(spacer(10))
-        upgradeContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        // Upgrades
+        content.addView(tv("⬆️  Улучшения", 22f, Color.parseColor("#E9FFFF"), Typeface.DEFAULT_BOLD).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-        }
-        buildUpgradeCards()
+        })
+        content.addView(spacer(10))
+        upgradeContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT) }
         content.addView(upgradeContainer)
         content.addView(spacer(24))
 
-        // Skins section
-        content.addView(makeSectionTitle("🎨  Скины"))
-        content.addView(spacer(10))
-        skinContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        // Skins
+        content.addView(tv("🎨  Скины", 22f, Color.parseColor("#E9FFFF"), Typeface.DEFAULT_BOLD).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-        }
-        buildSkinCards()
+        })
+        content.addView(spacer(10))
+        skinContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT) }
         content.addView(skinContainer)
 
-        scroll.addView(content)
-        root.addView(scroll)
-        setContentView(root)
-
-        tvBalance.text = formatScore(vm.getScore())
+        scroll.addView(content); root.addView(scroll); setContentView(root)
+        refreshAll()
     }
 
-    // ---- UPGRADE CARDS ----
+    private fun refreshAll() {
+        tvBalance.text = formatScore(GameRepository.score)
+        buildUpgradeCards()
+        buildSkinCards()
+    }
+
+    // ---- UPGRADES ----
 
     private fun buildUpgradeCards() {
         upgradeContainer.removeAllViews()
-        val ups = vm.getUpgrades()
+        val ups = GameRepository.upgrades
         UPGRADE_DEFINITIONS.forEach { def ->
             val count = when (def.type) {
                 "tapSmall"   -> ups.tapSmall
@@ -161,116 +121,69 @@ class ShopActivity : AppCompatActivity() {
     }
 
     private fun makeUpgradeCard(def: UpgradeDef, count: Int): FrameLayout {
-        val canAfford = vm.getScore() >= def.baseCost
-        val bg = getUpgradeCardColors(def.colorClass)
-        val borderColor = if (canAfford) Color.parseColor("#907EF1FF") else Color.parseColor("#33FFFFFF")
-
+        val canAfford = GameRepository.score >= def.baseCost
+        val (c1, c2) = upgradeColors(def.colorClass)
         val card = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(bg.first, bg.second)
-            ).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(c1, c2)).apply {
                 cornerRadius = dp(20).toFloat()
-                setStroke(dp(2), borderColor)
+                setStroke(dp(2), if (canAfford) Color.parseColor("#907EF1FF") else Color.parseColor("#33FFFFFF"))
             }
             setPadding(dp(18), dp(16), dp(18), dp(16))
         }
-
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         // Badge
-        val badge = TextView(this).apply {
-            text = def.badge
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(999).toFloat()
-                setColor(Color.parseColor("#33FFFFFF"))
-                setStroke(dp(1), Color.parseColor("#22FFFFFF"))
-            }
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            gravity = Gravity.CENTER
-            minWidth = dp(52)
-        }
-
-        // Info column
+        row.addView(TextView(this).apply {
+            text = def.badge; textSize = 14f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+            background = GradientDrawable().apply { cornerRadius = dp(999).toFloat(); setColor(Color.parseColor("#33FFFFFF")); setStroke(dp(1), Color.parseColor("#22FFFFFF")) }
+            setPadding(dp(12), dp(8), dp(12), dp(8)); gravity = Gravity.CENTER; minWidth = dp(52)
+        })
+        // Info
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(12)
-                rightMargin = dp(12)
-            }
+            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { leftMargin = dp(12); rightMargin = dp(12) }
         }
-        info.addView(TextView(this).apply {
-            text = def.title
-            textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-        })
-        info.addView(TextView(this).apply {
-            text = def.meta
-            textSize = 13f
-            setTextColor(Color.parseColor("#CCE2FFE4"))
-            setPadding(0, dp(2), 0, 0)
-        })
-        info.addView(TextView(this).apply {
-            text = "Куплено: $count"
-            textSize = 12f
-            setTextColor(Color.parseColor("#887EF1FF"))
-            setPadding(0, dp(4), 0, 0)
-        })
-
-        // Buy button
+        info.addView(tv(def.title, 20f, Color.WHITE, Typeface.DEFAULT_BOLD))
+        info.addView(tv(def.meta, 13f, Color.parseColor("#CCE2FFE4")))
+        info.addView(tv("Куплено: $count", 12f, Color.parseColor("#887EF1FF")).apply { setPadding(0, dp(4), 0, 0) })
+        // Buy btn
         val btn = Button(this).apply {
-            text = "${formatScore(def.baseCost)} 💰"
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
+            text = "${formatScore(def.baseCost)} 💰"; textSize = 13f; typeface = Typeface.DEFAULT_BOLD
             setTextColor(if (canAfford) Color.parseColor("#062035") else Color.parseColor("#AAFFFFFF"))
             layoutParams = LinearLayout.LayoutParams(dp(110), dp(44))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                if (canAfford)
-                    intArrayOf(Color.parseColor("#7EF1FF"), Color.parseColor("#27A4C8"))
-                else
-                    intArrayOf(Color.parseColor("#33FFFFFF"), Color.parseColor("#22FFFFFF"))
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                if (canAfford) intArrayOf(Color.parseColor("#7EF1FF"), Color.parseColor("#27A4C8"))
+                else intArrayOf(Color.parseColor("#33FFFFFF"), Color.parseColor("#22FFFFFF"))
             ).apply { cornerRadius = dp(14).toFloat() }
             setOnClickListener {
-                if (vm.buyUpgrade(def.type, this@ShopActivity)) {
-                    animateBuySuccess(it)
-                    buildUpgradeCards()
-                    buildSkinCards()
-                }
+                val err = GameRepository.buyUpgrade(def.type)
+                if (err == null) {
+                    animatePulse(it)
+                    GameRepository.saveLocal(this@ShopActivity)
+                    GameRepository.syncNow(this@ShopActivity)
+                    refreshAll()
+                } else Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
             }
         }
-
-        row.addView(badge)
-        row.addView(info)
-        row.addView(btn)
-        card.addView(row)
+        row.addView(info); row.addView(btn); card.addView(row)
         return card
     }
 
-    private fun getUpgradeCardColors(cls: String): Pair<Int, Int> = when (cls) {
-        "tap_small"   -> Pair(Color.parseColor("#183468"), Color.parseColor("#081531"))
-        "tap_big"     -> Pair(Color.parseColor("#4E1C68"), Color.parseColor("#190A30"))
-        "energy"      -> Pair(Color.parseColor("#4A350A"), Color.parseColor("#221505"))
-        "regen_boost" -> Pair(Color.parseColor("#165A3A"), Color.parseColor("#082618"))
-        "tap_huge"    -> Pair(Color.parseColor("#6E2512"), Color.parseColor("#2E0F07"))
-        "energy_huge" -> Pair(Color.parseColor("#183C6E"), Color.parseColor("#08142F"))
-        else          -> Pair(Color.parseColor("#1E1040"), Color.parseColor("#0A081E"))
+    private fun upgradeColors(cls: String): Pair<Int, Int> = when (cls) {
+        "tap_small"   -> Color.parseColor("#183468") to Color.parseColor("#081531")
+        "tap_big"     -> Color.parseColor("#4E1C68") to Color.parseColor("#190A30")
+        "energy"      -> Color.parseColor("#4A350A") to Color.parseColor("#221505")
+        "regen_boost" -> Color.parseColor("#165A3A") to Color.parseColor("#082618")
+        "tap_huge"    -> Color.parseColor("#6E2512") to Color.parseColor("#2E0F07")
+        "energy_huge" -> Color.parseColor("#183C6E") to Color.parseColor("#08142F")
+        else          -> Color.parseColor("#1E1040") to Color.parseColor("#0A081E")
     }
 
-    // ---- SKIN CARDS ----
+    // ---- SKINS ----
 
     private fun buildSkinCards() {
         skinContainer.removeAllViews()
-        val skinState = vm.getSkin()
-        // 2 per row
+        val skinState = GameRepository.skin
         var row: LinearLayout? = null
         SKIN_DEFINITIONS.forEachIndexed { index, def ->
             if (index % 2 == 0) {
@@ -284,104 +197,65 @@ class ShopActivity : AppCompatActivity() {
             val isOwned    = skinState.ownedSkinIds.contains(def.id)
             val isEquipped = skinState.equippedSkinId == def.id
             row!!.addView(makeSkinCard(def, isOwned, isEquipped))
-            if (index % 2 == 0) {
-                row!!.addView(spacer(12).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(12), MATCH_PARENT)
-                })
-            }
+            if (index % 2 == 0) row!!.addView(View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(12), MATCH_PARENT)
+            })
         }
     }
 
-    private fun makeSkinCard(def: SkinDef, isOwned: Boolean, isEquipped: Boolean): LinearLayout {
-        val borderColor = when {
-            isEquipped -> Color.parseColor("#7EF1FF")
-            isOwned    -> Color.parseColor("#6FF1E3")
-            else       -> Color.parseColor("#33FFFFFF")
-        }
+    private fun makeSkinCard(def: SkinDef, owned: Boolean, equipped: Boolean): LinearLayout {
+        val border = when { equipped -> Color.parseColor("#7EF1FF"); owned -> Color.parseColor("#6FF1E3"); else -> Color.parseColor("#33FFFFFF") }
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#5F38D4CC"), Color.parseColor("#33C5C7BB"))
-            ).apply {
-                cornerRadius = dp(18).toFloat()
-                setStroke(dp(2), borderColor)
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.parseColor("#5F38D4CC"), Color.parseColor("#33C5C7BB"))).apply {
+                cornerRadius = dp(18).toFloat(); setStroke(dp(2), border)
             }
             setPadding(dp(12), dp(12), dp(12), dp(12))
         }
-
-        // Skin image
         val img = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(140))
             scaleType = ImageView.ScaleType.FIT_CENTER
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(Color.parseColor("#22000000"))
-            }
-            clipToOutline = true
-            outlineProvider = ViewOutlineProvider.BACKGROUND
+            background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(Color.parseColor("#22000000")) }
+            clipToOutline = true; outlineProvider = ViewOutlineProvider.BACKGROUND
         }
         try {
-            val bmp = assets.open("skins/${def.assetName}").use {
-                android.graphics.BitmapFactory.decodeStream(it)
-            }
+            val bmp = assets.open("skins/${def.assetName}").use { android.graphics.BitmapFactory.decodeStream(it) }
             img.setImageBitmap(bmp)
-        } catch (e: Exception) {
-            img.setBackgroundColor(Color.parseColor("#33FFFFFF"))
-        }
-        card.addView(img)
-        card.addView(spacer(8))
-
-        // Name
-        card.addView(TextView(this).apply {
-            text = def.name
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER_HORIZONTAL
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
+        } catch (_: Exception) {}
+        card.addView(img); card.addView(spacer(8))
+        card.addView(tv(def.name, 14f, Color.WHITE, Typeface.DEFAULT_BOLD, Gravity.CENTER).apply {
+            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
         })
         card.addView(spacer(4))
+        card.addView(rarityChip(def.rarity)); card.addView(spacer(8))
 
-        // Rarity chip
-        card.addView(makeRarityChip(def.rarity))
-        card.addView(spacer(8))
-
-        // Action button
-        val btnText = when {
-            isEquipped -> "✓ Надет"
-            isOwned    -> "Установить"
-            else       -> "${formatScore(def.price)} 💰"
-        }
-        val btnBg = when {
-            isEquipped -> intArrayOf(Color.parseColor("#33C5C7"), Color.parseColor("#22A8B7"))
-            isOwned    -> intArrayOf(Color.parseColor("#5088FF"), Color.parseColor("#2859C2"))
-            else       -> intArrayOf(Color.parseColor("#7EF1FF"), Color.parseColor("#27A4FF"))
-        }
+        val btnText  = if (equipped) "✓ Надет" else if (owned) "Установить" else "${formatScore(def.price)} 💰"
+        val btnColors = if (equipped) intArrayOf(Color.parseColor("#33C5C7"), Color.parseColor("#22A8B7"))
+                        else if (owned) intArrayOf(Color.parseColor("#5088FF"), Color.parseColor("#2859C2"))
+                        else intArrayOf(Color.parseColor("#7EF1FF"), Color.parseColor("#27A4FF"))
         val btn = Button(this).apply {
-            text = btnText
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(if (isEquipped || isOwned) Color.WHITE else Color.parseColor("#062035"))
+            text = btnText; textSize = 13f; typeface = Typeface.DEFAULT_BOLD
+            setTextColor(if (equipped || owned) Color.WHITE else Color.parseColor("#062035"))
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(40))
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, btnBg).apply {
-                cornerRadius = dp(12).toFloat()
-            }
-            isEnabled = !isEquipped
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, btnColors).apply { cornerRadius = dp(12).toFloat() }
+            isEnabled = !equipped
             setOnClickListener {
-                vm.buySkin(def.id, this@ShopActivity)
-                buildSkinCards()
-                buildUpgradeCards()
+                val err = GameRepository.buySkin(def.id)
+                if (err == null) {
+                    GameRepository.saveLocal(this@ShopActivity)
+                    GameRepository.syncNow(this@ShopActivity)
+                    refreshAll()
+                } else Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
             }
         }
         card.addView(btn)
         return card
     }
 
-    private fun makeRarityChip(rarity: String): TextView {
-        val (label, bg) = when (rarity) {
+    private fun rarityChip(r: String): TextView {
+        val (label, bg) = when (r) {
             "uncommon"  -> "Необычный" to "#28139FCA28"
             "rare"      -> "Редкий"    to "#2874E7FF"
             "epic"      -> "Эпический" to "#28C791FF"
@@ -389,62 +263,37 @@ class ShopActivity : AppCompatActivity() {
             "admin"     -> "Админ."    to "#28FF6EB9"
             else        -> "Обычный"   to "#22FFFFFF"
         }
-        return TextView(this).apply {
-            text = label
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
+        return tv(label, 11f, Color.WHITE, Typeface.DEFAULT_BOLD, Gravity.CENTER).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(999).toFloat()
                 setColor(Color.parseColor(bg))
                 setStroke(dp(1), Color.parseColor("#22FFFFFF"))
             }
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-            }
+            layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL }
         }
     }
 
-    private fun makeSectionTitle(text: String): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 22f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(Color.parseColor("#E9FFFF"))
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-    }
-
-    // ---- OBSERVERS ----
-
-    private fun setupObservers() {
-        vm.score.observe(this) { s ->
-            tvBalance.text = formatScore(s)
-        }
-        vm.toastMsg.observe(this) { msg ->
-            if (msg != null) {
-                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                vm.toastMsg.value = null
-            }
-        }
-    }
-
-    private fun animateBuySuccess(v: View) {
+    private fun animatePulse(v: View) {
         ObjectAnimator.ofFloat(v, "scaleX", 1f, 0.88f, 1f).apply { duration = 200; start() }
         ObjectAnimator.ofFloat(v, "scaleY", 1f, 0.88f, 1f).apply { duration = 200; start() }
     }
 
-    // ---- HELPERS ----
-
-    private fun createPurpleGradient() = GradientDrawable(
-        GradientDrawable.Orientation.TOP_BOTTOM,
-        intArrayOf(Color.parseColor("#6B11D7"), Color.parseColor("#45118A"), Color.parseColor("#1C0F42"))
-    )
+    private fun tv(t: String, sz: Float, c: Int, tf: Typeface = Typeface.DEFAULT, g: Int = Gravity.START) =
+        TextView(this).apply { text = t; textSize = sz; typeface = tf; setTextColor(c); gravity = g }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun spacer(v: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(v))
-    }
+    private fun spacer(v: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(v)) }
     private val MATCH_PARENT = ViewGroup.LayoutParams.MATCH_PARENT
-    private val WRAP_CONTENT = ViewGroup.LayoutParams.WRAP_CONTENT
+    private val WRAP_CONTENT  = ViewGroup.LayoutParams.WRAP_CONTENT
+
+    override fun onStop() {
+        super.onStop()
+        GameRepository.saveLocal(this)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        GameRepository.onStateChanged = null
+    }
 }
