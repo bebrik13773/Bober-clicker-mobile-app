@@ -243,7 +243,11 @@ object ApiClient {
         conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code   = conn.responseCode
         val stream = if (code in 200..399) conn.inputStream else (conn.errorStream ?: conn.inputStream)
-        val text   = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        val text = if (stream != null) {
+            BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        } else {
+            ""
+        }
         conn.disconnect()
         Log.d(TAG, "POST $url → $code | ${text.take(160)}")
         return text
