@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity() {
 
     // =============== UI BUILD ===============
 
-        buildUI() {
+    private fun buildUI() {
         val root = FrameLayout(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
