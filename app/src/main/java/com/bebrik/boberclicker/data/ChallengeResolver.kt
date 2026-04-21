@@ -20,32 +20,28 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Решает JS/AES challenge хостинга через невидимый WebView.
+ * Решает JS/AES challenge хостинга bober-api.gt.tc через WebView.
  *
- * Поток:
- *  1. Показываем оверлей "Проверка соединения…"
- *  2. Невидимый WebView загружает BASE URL
- *  3. JS на странице расшифровывает AES, ставит куку _test, делает GET-редирект на ?i=1
- *  4. Мы перехватываем onPageFinished с url=?i=1 → даём 400мс на flush cookies
- *  5. Переносим ВСЕ куки из WebKit CookieManager в java.net.CookieManager
- *  6. Закрываем оверлей, разблокируем фоновый поток
+ * Как работает challenge (из shared-client.js оригинала):
+ *  1. Сервер возвращает HTML со скриптом, который:
+ *     - расшифровывает AES-значение
+ *     - ставит куку __test=<hex> (ДВОЙНОЕ подчёркивание)
+ *     - делает GET-редирект на <url>?i=1
+ *  2. Браузер/WebView выполняет JS, кука установлена, редирект на ?i=1 выполнен
+ *  3. После этого все API-запросы к .php идут с ?i=2 (так делает оригинальный клиент)
  */
 object ChallengeResolver {
     private const val TAG      = "BoberChallenge"
-    private const val DOMAIN   = "bober-api.gt.tc"
-    private const val BASE_URL = "https://$DOMAIN"
+    const val DOMAIN           = "bober-api.gt.tc"
+    const val BASE_URL         = "https://$DOMAIN"
     private const val TIMEOUT_MS = 12_000L
-    private const val POLL_MS    = 300L
+    private const val POLL_MS    = 250L
 
-    /**
-     * Вызывается из фонового потока. Блокирует до завершения.
-     * Возвращает true если кука _test успешно получена.
-     */
-    fun resolve(
-        context: Context,
-        javaCookieManager: CookieManager,
-        challengeUrl: String = BASE_URL
-    ): Boolean {
+    // Кука называется __test (двойное подчёркивание) — из shared-client.js оригинала
+    private const val COOKIE_NAME = "__test"
+
+    /** Вызывается из фонового потока. Блокирует до завершения или таймаута. */
+    fun resolve(context: Context, javaCookieManager: CookieManager): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             Log.e(TAG, "resolve() must not be called on main thread")
             return false
@@ -53,12 +49,13 @@ object ChallengeResolver {
         val latch   = CountDownLatch(1)
         var success = false
         Handler(Looper.getMainLooper()).post {
-            showOverlay(context, javaCookieManager, challengeUrl) { ok ->
+            showOverlay(context, javaCookieManager) { ok ->
                 success = ok
                 latch.countDown()
             }
         }
-        latch.await(TIMEOUT_MS + 3000, TimeUnit.MILLISECONDS)
+        val completed = latch.await(TIMEOUT_MS + 3000, TimeUnit.MILLISECONDS)
+        if (!completed) Log.w(TAG, "resolve() latch timed out")
         Log.d(TAG, "resolve done: success=$success")
         return success
     }
@@ -67,19 +64,17 @@ object ChallengeResolver {
     private fun showOverlay(
         context: Context,
         javaCookieManager: CookieManager,
-        challengeUrl: String,
         onDone: (Boolean) -> Unit
     ) {
         val activity = context as? Activity ?: run { onDone(false); return }
 
-        // ── Overlay UI ─────────────────────────────────────────
+        // ── Overlay ────────────────────────────────────────────
         val overlay = FrameLayout(activity).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(Color.parseColor("#CC0A0618"))
+            setBackgroundColor(Color.parseColor("#CC080416"))
         }
-
         val card = FrameLayout(activity).apply {
             layoutParams = FrameLayout.LayoutParams(dp(activity, 300), dp(activity, 170), Gravity.CENTER)
             setBackgroundColor(Color.parseColor("#1A1040"))
@@ -106,7 +101,7 @@ object ChallengeResolver {
         })
         overlay.addView(card)
 
-        // ── Invisible WebView ───────────────────────────────────
+        // ── Invisible WebView ──────────────────────────────────
         val webView = WebView(activity).apply {
             layoutParams = FrameLayout.LayoutParams(1, 1)
             visibility = android.view.View.INVISIBLE
@@ -114,66 +109,71 @@ object ChallengeResolver {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            userAgentString = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36 BoberApp/4.0"
+            // Имитируем обычный браузер — некоторые хостинги проверяют UA
+            userAgentString = "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         }
-        // Убедимся что WebKit CookieManager включён
         android.webkit.CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
+            // Удаляем старую сессию чтобы challenge не кешировался
+            removeSessionCookies(null)
         }
         overlay.addView(webView)
 
         val decor = activity.window.decorView as? FrameLayout ?: run { onDone(false); return }
         decor.addView(overlay)
 
-        // ── State ───────────────────────────────────────────────
+        // ── State ──────────────────────────────────────────────
         val mainHandler   = Handler(Looper.getMainLooper())
         var done          = false
         var elapsedMs     = 0L
-        var seenFinalPage = false // видели ли редирект ?i=1
+        var finalPageSeen = false  // видели ли GET-редирект ?i=1
 
         fun finish(ok: Boolean) {
             if (done) return
             done = true
-            // Flush WebKit cookie store
             android.webkit.CookieManager.getInstance().flush()
             val rawCookies = android.webkit.CookieManager.getInstance().getCookie(BASE_URL) ?: ""
-            Log.d(TAG, "finish ok=$ok rawCookies=$rawCookies")
-            val hasTest = rawCookies.contains("_test=")
+            Log.d(TAG, "finish ok=$ok rawCookies=[$rawCookies]")
+            val hasTest = rawCookies.contains("$COOKIE_NAME=")
             if (hasTest) transferCookies(rawCookies, javaCookieManager)
+            else Log.w(TAG, "No $COOKIE_NAME cookie after challenge!")
             decor.removeView(overlay)
             webView.stopLoading(); webView.destroy()
             onDone(ok && hasTest)
         }
 
-        // Polling — запасной на случай если ?i=1 уже был в кеше и onPageFinished не сработал
+        // Polling — запасной
         val pollRunnable = object : Runnable {
             override fun run() {
                 if (done) return
                 elapsedMs += POLL_MS
                 val raw = android.webkit.CookieManager.getInstance().getCookie(BASE_URL) ?: ""
-                Log.d(TAG, "poll ${elapsedMs}ms seenFinal=$seenFinalPage cookies=${raw.take(60)}")
+                val has = raw.contains("$COOKIE_NAME=")
+                Log.d(TAG, "poll ${elapsedMs}ms finalPage=$finalPageSeen has${COOKIE_NAME}=$has")
                 when {
-                    seenFinalPage && raw.contains("_test=") -> finish(true)
-                    elapsedMs >= TIMEOUT_MS                  -> finish(raw.contains("_test="))
-                    else                                     -> mainHandler.postDelayed(this, POLL_MS)
+                    finalPageSeen && has    -> finish(true)
+                    elapsedMs >= TIMEOUT_MS -> finish(has)
+                    else                    -> mainHandler.postDelayed(this, POLL_MS)
                 }
             }
         }
 
-        // ── WebViewClient ────────────────────────────────────────
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
-                Log.d(TAG, "page=$url")
+                Log.d(TAG, "WebView page: $url")
                 if (done) return
-                if (url.contains("i=1")) {
-                    // Финальный редирект — сервер принял куку
-                    seenFinalPage = true
-                    // Дополнительные 500мс чтобы WebKit записал куки на диск
-                    mainHandler.postDelayed({ finish(true) }, 500)
-                } else {
-                    // Первая страница загружена — начинаем polling
-                    mainHandler.postDelayed(pollRunnable, POLL_MS)
+                when {
+                    // Финальная страница — JS сделал redirect на ?i=1
+                    url.contains("i=1") || url.contains("i=2") -> {
+                        finalPageSeen = true
+                        // 600мс чтобы WebKit записал куки на диск
+                        mainHandler.postDelayed({ finish(true) }, 600)
+                    }
+                    else -> {
+                        // Первая страница загружена, JS выполняется — начинаем polling
+                        mainHandler.postDelayed(pollRunnable, POLL_MS)
+                    }
                 }
             }
 
@@ -181,29 +181,27 @@ object ChallengeResolver {
                 view: WebView, request: WebResourceRequest, error: WebResourceError
             ) {
                 if (!request.isForMainFrame || done) return
-                Log.e(TAG, "WebView error url=${request.url}: ${error.description}")
-                // Если ошибка пришла уже после ?i=1 — не страшно, кука есть
-                if (seenFinalPage) {
-                    mainHandler.postDelayed({ finish(true) }, 300)
-                } else {
-                    finish(false)
-                }
+                Log.e(TAG, "WebView error ${request.url}: ${error.description}")
+                // Ошибка на финальной странице (?i=1) — не страшно, кука уже стоит
+                if (finalPageSeen) mainHandler.postDelayed({ finish(true) }, 400)
+                else finish(false)
             }
 
             @Suppress("OVERRIDE_DEPRECATION")
             override fun onReceivedError(view: WebView, code: Int, desc: String, url: String) {
                 if (done) return
-                Log.e(TAG, "WebView legacy error $code url=$url")
-                if (seenFinalPage) mainHandler.postDelayed({ finish(true) }, 300)
-                else finish(false)
+                if (url.contains("i=1") || url.contains("i=2")) {
+                    finalPageSeen = true
+                    mainHandler.postDelayed({ finish(true) }, 400)
+                }
             }
         }
 
-        Log.d(TAG, "Loading: $challengeUrl")
-        webView.loadUrl(challengeUrl)
+        // Загружаем главную страницу сайта (не API endpoint!)
+        // Это триггерит challenge как обычный браузер
+        Log.d(TAG, "Loading $BASE_URL to trigger challenge JS")
+        webView.loadUrl(BASE_URL)
     }
-
-    // ── Helpers ─────────────────────────────────────────────────
 
     private fun transferCookies(rawCookies: String, javaCookieManager: CookieManager) {
         try {
@@ -212,11 +210,13 @@ object ChallengeResolver {
                 val name  = part.substringBefore("=").trim()
                 val value = part.substringAfter("=").trim()
                 if (name.isNotEmpty()) {
-                    val c = HttpCookie(name, value).apply { path = "/"; domain = DOMAIN; maxAge = 21600 }
+                    val c = HttpCookie(name, value).apply {
+                        path = "/"; domain = DOMAIN; maxAge = 21600
+                    }
                     javaCookieManager.cookieStore.add(uri, c)
                 }
             }
-            Log.d(TAG, "Cookies transferred to java.net: $rawCookies")
+            Log.d(TAG, "Transferred: $rawCookies")
         } catch (e: Exception) {
             Log.e(TAG, "transferCookies error", e)
         }

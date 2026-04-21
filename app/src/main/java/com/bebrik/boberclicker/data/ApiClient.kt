@@ -17,18 +17,21 @@ object ApiClient {
     const val BASE            = "https://bober-api.gt.tc"
     private const val TIMEOUT = 14_000
 
-    // java.net cookie jar — shared with ChallengeResolver
+    // Значение ?i= после решения challenge (оригинал использует '2')
+    private const val CHALLENGE_I_VALUE = "2"
+
+    // java.net CookieManager — разделяется с ChallengeResolver
     val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL).also {
         java.net.CookieHandler.setDefault(it)
     }
-    @Volatile private var lastDebugLog: String = ""
 
-    // Activity context for WebView challenge — set by BoberApp / activities
+    // Activity context — нужен для WebView challenge
     var activityContext: Context? = null
 
-    // ──────────────────────────────────────────────────────────────
-    //  Public API
-    // ──────────────────────────────────────────────────────────────
+    // Флаг: challenge уже решён в этой сессии
+    private var challengeSolved = false
+
+    // ── Data classes ────────────────────────────────────────────
 
     data class LoginResult(
         val success: Boolean, val message: String,
@@ -49,6 +52,8 @@ object ApiClient {
         val skin: SkinState = SkinState(),
         val leaderboard: List<LeaderboardEntry> = emptyList()
     )
+
+    // ── Public API ──────────────────────────────────────────────
 
     fun login(login: String, password: String): LoginResult {
         return try {
@@ -122,6 +127,7 @@ object ApiClient {
     fun logout() {
         try { post("/api/auth/logout.php", JSONObject()) } catch (_: Exception) {}
         cookieManager.cookieStore.removeAll()
+        challengeSolved = false
     }
 
     fun restoreCookies(raw: String) {
@@ -136,6 +142,12 @@ object ApiClient {
                     cookieManager.cookieStore.add(uri, c)
                 }
             }
+            // Если есть __test — challenge уже решён
+            val uri = URL(BASE).toURI()
+            if (cookieManager.cookieStore.get(uri).any { it.name == "__test" }) {
+                challengeSolved = true
+                Log.d(TAG, "Challenge cookie restored from prefs")
+            }
         } catch (e: Exception) { Log.w(TAG, "restoreCookies: $e") }
     }
 
@@ -144,62 +156,75 @@ object ApiClient {
         cookieManager.cookieStore.get(uri).joinToString("; ") { "${it.name}=${it.value}" }
     } catch (_: Exception) { "" }
 
-    fun getLastDebugLog(): String = lastDebugLog
-
-    // ──────────────────────────────────────────────────────────────
-    //  HTTP core with WebView challenge auto-solve
-    // ──────────────────────────────────────────────────────────────
+    // ── HTTP core ───────────────────────────────────────────────
 
     /**
-     * POST endpoint.
-     * Если сервер вернул HTML-challenge — запускаем ChallengeResolver (WebView),
-     * ждём куку _test, потом повторяем запрос.
+     * POST-запрос с автоматическим решением challenge.
+     *
+     * Логика из shared-client.js оригинала:
+     *  1. POST /api/foo.php  →  HTML challenge
+     *  2. WebView решает challenge → кука __test установлена
+     *  3. POST /api/foo.php?i=2  →  нормальный JSON ответ
+     *  4. Все последующие POST к .php идут с ?i=2
      */
     private fun post(path: String, body: JSONObject): JSONObject {
-        var text = rawPost("$BASE$path", body)
+        // Строим URL: добавляем ?i=2 если challenge уже решён
+        val url  = buildUrl(path)
+        var text = rawPost(url, body)
 
         if (isChallengePage(text)) {
-            appendDebug("JS challenge detected on $path")
-            Log.d(TAG, "Challenge detected on $path, launching WebView resolver…")
+            Log.d(TAG, "Challenge detected, launching WebView…")
             val ctx = activityContext
-            if (ctx != null) {
-                // WebView загружает BASE, JS запускается, ставит _test куку и сам делает
-                // GET-редирект на ?i=1 — нам этого делать не нужно.
-                // После того как WebView завершил работу и куки перенесены,
-                // просто повторяем оригинальный POST на тот же path.
-                val solved = ChallengeResolver.resolve(ctx, cookieManager, BASE)
-                if (solved) {
-                    text = rawPost("$BASE$path", body)
-                    Log.d(TAG, "Retry after challenge: ${text.take(100)}")
-                }
-            } else {
-                Log.e(TAG, "activityContext is null — can't resolve challenge")
+            if (ctx == null) {
+                Log.e(TAG, "activityContext is null — cannot resolve challenge")
+                return errorJson("Сервер требует проверку. Перезапустите приложение.")
             }
+            val solved = ChallengeResolver.resolve(ctx, cookieManager)
+            if (!solved) {
+                return errorJson("Не удалось пройти проверку сервера. Попробуйте позже.")
+            }
+            challengeSolved = true
+            // Повторяем с ?i=2 — именно так делает оригинальный клиент
+            text = rawPost(buildUrl(path), body)
+            Log.d(TAG, "Retry after challenge: ${text.take(100)}")
         }
 
         if (isChallengePage(text)) {
-            Log.e(TAG, "Still HTML after challenge resolution")
-            return JSONObject().apply {
-                put("success", false)
-                put("message", "Сервер не ответил. Попробуйте позже.")
-            }
+            Log.e(TAG, "Still challenge after retry")
+            return errorJson("Сервер не ответил. Попробуйте позже.")
         }
 
         return try {
             JSONObject(text)
         } catch (_: Exception) {
-            appendDebug("JSON parse failed. Raw response kept.")
             Log.e(TAG, "Bad JSON: ${text.take(200)}")
-            JSONObject().apply { put("success", false); put("message", "Ошибка ответа сервера") }
+            errorJson("Неверный ответ сервера")
+        }
+    }
+
+    /**
+     * Строит URL: добавляет ?i=2 к .php если challenge решён.
+     * Точно повторяет resolveRuntimeUrl из shared-client.js.
+     */
+    private fun buildUrl(path: String): String {
+        if (!challengeSolved) return "$BASE$path"
+        // Добавляем ?i=2 к .php endpoint-ам
+        return if (path.endsWith(".php") || path.contains(".php?")) {
+            if (path.contains("?")) "$BASE$path&i=$CHALLENGE_I_VALUE"
+            else "$BASE$path?i=$CHALLENGE_I_VALUE"
+        } else {
+            "$BASE$path"
         }
     }
 
     private fun isChallengePage(text: String): Boolean {
         val t = text.trimStart()
+        // Точная проверка как в shared-client.js
         return t.startsWith("<") && (
             t.contains("slowAES") ||
-            t.contains("_test=") ||
-            t.contains("aes.js")
+            t.contains("__test=") ||   // двойное подчёркивание!
+            t.contains("aes.js") ||
+            t.contains("slowAES.decrypt")
         )
     }
 
@@ -212,38 +237,27 @@ object ApiClient {
             doOutput       = true
             setRequestProperty("Content-Type",      "application/json")
             setRequestProperty("Accept",            "application/json, text/html")
-            setRequestProperty("User-Agent",        "BoberClickerApp/4.0 Android")
+            // Точный UA как в браузере — важно для challenge
+            setRequestProperty("User-Agent",
+                "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
             setRequestProperty("X-Requested-With",  "XMLHttpRequest")
+            setRequestProperty("Origin",            BASE)
+            setRequestProperty("Referer",           "$BASE/pages/clicker/")
         }
         conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code   = conn.responseCode
         val stream = if (code in 200..399) conn.inputStream else (conn.errorStream ?: conn.inputStream)
-        val text = if (stream != null) {
-            BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
-        } else {
-            ""
-        }
-        lastDebugLog = buildString {
-            appendLine("=== API DEBUG ===")
-            appendLine("URL: $url")
-            appendLine("METHOD: POST")
-            appendLine("STATUS: $code")
-            appendLine("REQUEST: ${body.toString()}")
-            appendLine("RESPONSE:")
-            appendLine(text)
-        }
+        val text   = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
         conn.disconnect()
         Log.d(TAG, "POST $url → $code | ${text.take(160)}")
         return text
     }
 
-    private fun appendDebug(line: String) {
-        lastDebugLog = if (lastDebugLog.isBlank()) line else "$lastDebugLog\n$line"
+    private fun errorJson(msg: String) = JSONObject().apply {
+        put("success", false); put("message", msg)
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Parsers
-    // ──────────────────────────────────────────────────────────────
+    // ── Parsers ─────────────────────────────────────────────────
 
     private fun buildSavePayload(userId: Int, s: GameState) = JSONObject().apply {
         val u = s.upgrades
