@@ -22,119 +22,91 @@ import java.util.concurrent.TimeUnit
 /**
  * Решает JS/AES challenge хостинга через невидимый WebView.
  *
- * Алгоритм:
- *  1. Открываем наложение-оверлей (поверх текущей Activity) с WebView.
- *  2. Загружаем challengeUrl в WebView — он запускает JS, ставит куку _test и
- *     делает redirect обратно на API.
- *  3. Polling каждые 200 мс: как только _test появился в WebView CookieManager —
- *     переносим ВСЕ куки сайта в java.net.CookieManager и закрываем оверлей.
- *  4. Таймаут — 10 секунд, после чего закрываем без гарантии.
+ * Поток:
+ *  1. Показываем оверлей "Проверка соединения…"
+ *  2. Невидимый WebView загружает BASE URL
+ *  3. JS на странице расшифровывает AES, ставит куку _test, делает GET-редирект на ?i=1
+ *  4. Мы перехватываем onPageFinished с url=?i=1 → даём 400мс на flush cookies
+ *  5. Переносим ВСЕ куки из WebKit CookieManager в java.net.CookieManager
+ *  6. Закрываем оверлей, разблокируем фоновый поток
  */
 object ChallengeResolver {
     private const val TAG      = "BoberChallenge"
     private const val DOMAIN   = "bober-api.gt.tc"
     private const val BASE_URL = "https://$DOMAIN"
-    private const val TIMEOUT_MS = 10_000L
-    private const val POLL_MS    = 200L
+    private const val TIMEOUT_MS = 12_000L
+    private const val POLL_MS    = 300L
 
     /**
-     * Запускается из фонового потока.
-     * Блокирует вызывающий поток до завершения (или таймаута).
-     * Возвращает true если куки успешно получены.
+     * Вызывается из фонового потока. Блокирует до завершения.
+     * Возвращает true если кука _test успешно получена.
      */
     fun resolve(
         context: Context,
         javaCookieManager: CookieManager,
-        challengeUrl: String = "$BASE_URL/"
+        challengeUrl: String = BASE_URL
     ): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            Log.e(TAG, "resolve() called on main thread — skip")
+            Log.e(TAG, "resolve() must not be called on main thread")
             return false
         }
-
-        val latch = CountDownLatch(1)
+        val latch   = CountDownLatch(1)
         var success = false
-
-        val mainHandler = Handler(Looper.getMainLooper())
-        mainHandler.post {
-            showChallengeOverlay(context, javaCookieManager, challengeUrl) { ok ->
+        Handler(Looper.getMainLooper()).post {
+            showOverlay(context, javaCookieManager, challengeUrl) { ok ->
                 success = ok
                 latch.countDown()
             }
         }
-
-        latch.await(TIMEOUT_MS + 2000, TimeUnit.MILLISECONDS)
-        Log.d(TAG, "resolve finished: success=$success")
+        latch.await(TIMEOUT_MS + 3000, TimeUnit.MILLISECONDS)
+        Log.d(TAG, "resolve done: success=$success")
         return success
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showChallengeOverlay(
+    private fun showOverlay(
         context: Context,
         javaCookieManager: CookieManager,
         challengeUrl: String,
         onDone: (Boolean) -> Unit
     ) {
-        val activity = context as? Activity ?: run {
-            Log.e(TAG, "Context is not Activity")
-            onDone(false)
-            return
-        }
+        val activity = context as? Activity ?: run { onDone(false); return }
 
-        // Root overlay — тёмный полупрозрачный фон
+        // ── Overlay UI ─────────────────────────────────────────
         val overlay = FrameLayout(activity).apply {
             layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(Color.parseColor("#CC0A0618"))
         }
 
-        // Карточка по центру
         val card = FrameLayout(activity).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                dpToPx(activity, 280), dpToPx(activity, 160),
-                Gravity.CENTER
-            )
+            layoutParams = FrameLayout.LayoutParams(dp(activity, 300), dp(activity, 170), Gravity.CENTER)
             setBackgroundColor(Color.parseColor("#1A1040"))
-            // rounded corners через outline
         }
-
-        val label = TextView(activity).apply {
+        card.addView(TextView(activity).apply {
             text = "🔐 Проверка соединения…"
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+            textSize = 15f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER_HORIZONTAL or Gravity.TOP
-            ).also { it.topMargin = dpToPx(activity, 24) }
-        }
-
-        val progress = ProgressBar(activity).apply {
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            ).also { it.topMargin = dp(activity, 24) }
+        })
+        card.addView(ProgressBar(activity).apply {
             isIndeterminate = true
-            layoutParams = FrameLayout.LayoutParams(
-                dpToPx(activity, 48), dpToPx(activity, 48), Gravity.CENTER
-            ).also { it.topMargin = dpToPx(activity, 20) }
-        }
-
-        val subLabel = TextView(activity).apply {
-            text = "Обычно занимает 1–3 секунды"
-            textSize = 12f
-            setTextColor(Color.parseColor("#88AABB"))
-            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(dp(activity, 48), dp(activity, 48), Gravity.CENTER)
+        })
+        card.addView(TextView(activity).apply {
+            text = "Обычно 1–3 секунды"
+            textSize = 12f; setTextColor(Color.parseColor("#88AABB")); gravity = Gravity.CENTER
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM
-            ).also { it.bottomMargin = dpToPx(activity, 20) }
-        }
-
-        card.addView(label)
-        card.addView(progress)
-        card.addView(subLabel)
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            ).also { it.bottomMargin = dp(activity, 20) }
+        })
         overlay.addView(card)
 
-        // WebView — невидимый, 1×1 пикселей (за пределами экрана)
+        // ── Invisible WebView ───────────────────────────────────
         val webView = WebView(activity).apply {
             layoutParams = FrameLayout.LayoutParams(1, 1)
             visibility = android.view.View.INVISIBLE
@@ -142,81 +114,97 @@ object ChallengeResolver {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            userAgentString   = "BoberClickerApp/4.0 Android"
+            userAgentString = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36 BoberApp/4.0"
         }
-        // Синхронизируем CookieManager WebView
+        // Убедимся что WebKit CookieManager включён
         android.webkit.CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
         }
-
         overlay.addView(webView)
 
-        val decor = activity.window.decorView as? FrameLayout
-        decor?.addView(overlay) ?: run { onDone(false); return }
+        val decor = activity.window.decorView as? FrameLayout ?: run { onDone(false); return }
+        decor.addView(overlay)
 
-        val mainHandler = Handler(Looper.getMainLooper())
-        var elapsedMs = 0L
-        var done = false
+        // ── State ───────────────────────────────────────────────
+        val mainHandler   = Handler(Looper.getMainLooper())
+        var done          = false
+        var elapsedMs     = 0L
+        var seenFinalPage = false // видели ли редирект ?i=1
 
-        // Polling — ждём появления _test куки
+        fun finish(ok: Boolean) {
+            if (done) return
+            done = true
+            // Flush WebKit cookie store
+            android.webkit.CookieManager.getInstance().flush()
+            val rawCookies = android.webkit.CookieManager.getInstance().getCookie(BASE_URL) ?: ""
+            Log.d(TAG, "finish ok=$ok rawCookies=$rawCookies")
+            val hasTest = rawCookies.contains("_test=")
+            if (hasTest) transferCookies(rawCookies, javaCookieManager)
+            decor.removeView(overlay)
+            webView.stopLoading(); webView.destroy()
+            onDone(ok && hasTest)
+        }
+
+        // Polling — запасной на случай если ?i=1 уже был в кеше и onPageFinished не сработал
         val pollRunnable = object : Runnable {
             override fun run() {
                 if (done) return
                 elapsedMs += POLL_MS
-
-                val rawCookies = android.webkit.CookieManager.getInstance()
-                    .getCookie(BASE_URL) ?: ""
-                Log.d(TAG, "poll ${elapsedMs}ms cookies: ${rawCookies.take(120)}")
-
-                val hasCookie = rawCookies.contains("_test=")
-
-                if (hasCookie || elapsedMs >= TIMEOUT_MS) {
-                    done = true
-                    val success = hasCookieTest(rawCookies)
-                    if (success) {
-                        transferCookies(rawCookies, javaCookieManager)
-                        Log.d(TAG, "Challenge solved via WebView ✓")
-                    } else {
-                        Log.w(TAG, "Challenge timeout without _test cookie")
-                    }
-                    // Убираем оверлей
-                    decor.removeView(overlay)
-                    webView.destroy()
-                    onDone(success)
-                } else {
-                    mainHandler.postDelayed(this, POLL_MS)
+                val raw = android.webkit.CookieManager.getInstance().getCookie(BASE_URL) ?: ""
+                Log.d(TAG, "poll ${elapsedMs}ms seenFinal=$seenFinalPage cookies=${raw.take(60)}")
+                when {
+                    seenFinalPage && raw.contains("_test=") -> finish(true)
+                    elapsedMs >= TIMEOUT_MS                  -> finish(raw.contains("_test="))
+                    else                                     -> mainHandler.postDelayed(this, POLL_MS)
                 }
             }
         }
 
+        // ── WebViewClient ────────────────────────────────────────
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
-                Log.d(TAG, "WebView page loaded: $url")
-                // Start polling after first page load
-                if (!done) mainHandler.postDelayed(pollRunnable, POLL_MS)
+                Log.d(TAG, "page=$url")
+                if (done) return
+                if (url.contains("i=1")) {
+                    // Финальный редирект — сервер принял куку
+                    seenFinalPage = true
+                    // Дополнительные 500мс чтобы WebKit записал куки на диск
+                    mainHandler.postDelayed({ finish(true) }, 500)
+                } else {
+                    // Первая страница загружена — начинаем polling
+                    mainHandler.postDelayed(pollRunnable, POLL_MS)
+                }
             }
 
             override fun onReceivedError(
                 view: WebView, request: WebResourceRequest, error: WebResourceError
             ) {
-                if (request.isForMainFrame) {
-                    Log.e(TAG, "WebView error: ${error.description}")
-                    done = true
-                    decor.removeView(overlay)
-                    view.destroy()
-                    onDone(false)
+                if (!request.isForMainFrame || done) return
+                Log.e(TAG, "WebView error url=${request.url}: ${error.description}")
+                // Если ошибка пришла уже после ?i=1 — не страшно, кука есть
+                if (seenFinalPage) {
+                    mainHandler.postDelayed({ finish(true) }, 300)
+                } else {
+                    finish(false)
                 }
+            }
+
+            @Suppress("OVERRIDE_DEPRECATION")
+            override fun onReceivedError(view: WebView, code: Int, desc: String, url: String) {
+                if (done) return
+                Log.e(TAG, "WebView legacy error $code url=$url")
+                if (seenFinalPage) mainHandler.postDelayed({ finish(true) }, 300)
+                else finish(false)
             }
         }
 
-        Log.d(TAG, "Loading challenge URL: $challengeUrl")
+        Log.d(TAG, "Loading: $challengeUrl")
         webView.loadUrl(challengeUrl)
     }
 
-    private fun hasCookieTest(raw: String) = raw.contains("_test=")
+    // ── Helpers ─────────────────────────────────────────────────
 
-    /** Переносим куки из WebKit CookieManager в java.net.CookieManager */
     private fun transferCookies(rawCookies: String, javaCookieManager: CookieManager) {
         try {
             val uri = URL(BASE_URL).toURI()
@@ -224,20 +212,15 @@ object ChallengeResolver {
                 val name  = part.substringBefore("=").trim()
                 val value = part.substringAfter("=").trim()
                 if (name.isNotEmpty()) {
-                    val cookie = HttpCookie(name, value).apply {
-                        path   = "/"
-                        domain = DOMAIN
-                        maxAge = 21600
-                    }
-                    javaCookieManager.cookieStore.add(uri, cookie)
+                    val c = HttpCookie(name, value).apply { path = "/"; domain = DOMAIN; maxAge = 21600 }
+                    javaCookieManager.cookieStore.add(uri, c)
                 }
             }
-            Log.d(TAG, "Transferred cookies: $rawCookies")
+            Log.d(TAG, "Cookies transferred to java.net: $rawCookies")
         } catch (e: Exception) {
             Log.e(TAG, "transferCookies error", e)
         }
     }
 
-    private fun dpToPx(ctx: Context, dp: Int) =
-        (dp * ctx.resources.displayMetrics.density).toInt()
+    private fun dp(ctx: Context, v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 }

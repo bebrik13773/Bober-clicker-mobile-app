@@ -163,11 +163,13 @@ object ApiClient {
             Log.d(TAG, "Challenge detected on $path, launching WebView resolver…")
             val ctx = activityContext
             if (ctx != null) {
+                // WebView загружает BASE, JS запускается, ставит _test куку и сам делает
+                // GET-редирект на ?i=1 — нам этого делать не нужно.
+                // После того как WebView завершил работу и куки перенесены,
+                // просто повторяем оригинальный POST на тот же path.
                 val solved = ChallengeResolver.resolve(ctx, cookieManager, BASE)
                 if (solved) {
-                    // Retry — challenge should be cleared
-                    val retryPath = if (path.contains("?")) "$path&i=1" else "$path?i=1"
-                    text = rawPost("$BASE$retryPath", body)
+                    text = rawPost("$BASE$path", body)
                     Log.d(TAG, "Retry after challenge: ${text.take(100)}")
                 }
             } else {
