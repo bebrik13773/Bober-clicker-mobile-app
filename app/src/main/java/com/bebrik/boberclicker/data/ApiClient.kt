@@ -17,18 +17,13 @@ object ApiClient {
     const val BASE            = "https://bober-api.gt.tc"
     private const val TIMEOUT = 14_000
 
-    // Значение ?i= после решения challenge (оригинал использует '2')
-    private const val CHALLENGE_I_VALUE = "2"
-
-    // java.net CookieManager — разделяется с ChallengeResolver
     val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ALL).also {
         java.net.CookieHandler.setDefault(it)
     }
 
-    // Activity context — нужен для WebView challenge
     var activityContext: Context? = null
 
-    // Флаг: challenge уже решён в этой сессии
+    // После решения challenge все .php запросы идут с ?i=2
     private var challengeSolved = false
 
     // ── Data classes ────────────────────────────────────────────
@@ -62,12 +57,9 @@ object ApiClient {
             if (!resp.optBoolean("success"))
                 return LoginResult(false, resp.optString("message", "Ошибка входа"))
             LoginResult(
-                success  = true,
-                message  = resp.optString("message", ""),
-                userId   = resp.optInt("userId"),
-                login    = resp.optString("login", login),
-                score    = resp.optLong("score"),
-                plus     = resp.optInt("plus", 1),
+                success  = true, message = resp.optString("message", ""),
+                userId   = resp.optInt("userId"), login = resp.optString("login", login),
+                score    = resp.optLong("score"), plus  = resp.optInt("plus", 1),
                 energyMax        = resp.optInt("ENERGY_MAX", 5000),
                 energy           = resp.optDouble("energy", 5000.0).toFloat(),
                 lastEnergyUpdate = resp.optLong("lastEnergyUpdate", System.currentTimeMillis()),
@@ -75,8 +67,7 @@ object ApiClient {
                 skin     = parseSkin(resp.optString("skin"))
             )
         } catch (e: Exception) {
-            Log.e(TAG, "login error", e)
-            LoginResult(false, "Ошибка сети: ${e.message}")
+            Log.e(TAG, "login", e); LoginResult(false, "Ошибка сети: ${e.message}")
         }
     }
 
@@ -96,8 +87,7 @@ object ApiClient {
                 leaderboard = parseLeaderboard(resp.optJSONObject("leaderboards"))
             )
         } catch (e: Exception) {
-            Log.e(TAG, "sync error", e)
-            SyncResult(false, "Нет сети: ${e.message}")
+            Log.e(TAG, "sync", e); SyncResult(false, "Нет сети: ${e.message}")
         }
     }
 
@@ -105,12 +95,10 @@ object ApiClient {
         return try {
             val resp = post("/api/state/sync.php", JSONObject())
             val acc  = resp.optJSONObject("account")
-            if (acc == null || acc.optInt("userId") == 0)
-                return SyncResult(false, "Сессия истекла")
+            if (acc == null || acc.optInt("userId") == 0) return SyncResult(false, "Сессия истекла")
             SyncResult(
                 success   = true,
-                score     = acc.optLong("score"),
-                plus      = acc.optInt("plus", 1),
+                score     = acc.optLong("score"), plus      = acc.optInt("plus", 1),
                 energyMax = acc.optInt("ENERGY_MAX", 5000),
                 energy    = acc.optDouble("energy", 5000.0).toFloat(),
                 lastEnergyUpdate = acc.optLong("lastEnergyUpdate", System.currentTimeMillis()),
@@ -119,8 +107,7 @@ object ApiClient {
                 leaderboard = parseLeaderboard(resp.optJSONObject("leaderboards"))
             )
         } catch (e: Exception) {
-            Log.e(TAG, "restoreSession error", e)
-            SyncResult(false, "Нет сети")
+            Log.e(TAG, "restoreSession", e); SyncResult(false, "Нет сети")
         }
     }
 
@@ -137,60 +124,60 @@ object ApiClient {
             raw.split(";").map { it.trim() }.filter { it.contains("=") }.forEach { part ->
                 val name  = part.substringBefore("=").trim()
                 val value = part.substringAfter("=").trim()
-                if (name.isNotEmpty()) {
-                    val c = HttpCookie(name, value).apply { path = "/"; domain = "bober-api.gt.tc" }
-                    cookieManager.cookieStore.add(uri, c)
-                }
+                if (name.isNotEmpty())
+                    cookieManager.cookieStore.add(uri,
+                        HttpCookie(name, value).apply { path = "/"; domain = "bober-api.gt.tc" })
             }
-            // Если есть __test — challenge уже решён
-            val uri = URL(BASE).toURI()
-            if (cookieManager.cookieStore.get(uri).any { it.name == "__test" }) {
+            // Если сохранена кука _test или __test — challenge был решён
+            val cookies = cookieManager.cookieStore.get(URL(BASE).toURI())
+            if (cookies.any { it.name == "_test" || it.name == "__test" }) {
                 challengeSolved = true
-                Log.d(TAG, "Challenge cookie restored from prefs")
+                Log.d(TAG, "Challenge cookie restored")
             }
         } catch (e: Exception) { Log.w(TAG, "restoreCookies: $e") }
     }
 
     fun exportCookies(): String = try {
-        val uri = URL(BASE).toURI()
-        cookieManager.cookieStore.get(uri).joinToString("; ") { "${it.name}=${it.value}" }
+        cookieManager.cookieStore.get(URL(BASE).toURI()).joinToString("; ") { "${it.name}=${it.value}" }
     } catch (_: Exception) { "" }
 
     // ── HTTP core ───────────────────────────────────────────────
 
     /**
-     * POST-запрос с автоматическим решением challenge.
+     * POST с автоматическим решением challenge.
      *
-     * Логика из shared-client.js оригинала:
-     *  1. POST /api/foo.php  →  HTML challenge
-     *  2. WebView решает challenge → кука __test установлена
-     *  3. POST /api/foo.php?i=2  →  нормальный JSON ответ
-     *  4. Все последующие POST к .php идут с ?i=2
+     * Точная логика shared-client.js:
+     *   attempt 0: POST /api/foo.php             → HTML challenge
+     *   WebView:   GET  /api/foo.php?i=1          → сервер принимает куку
+     *   attempt 1: POST /api/foo.php?i=2          → нормальный JSON ответ
+     *
+     * После этого ВСЕ .php запросы идут с ?i=2.
      */
     private fun post(path: String, body: JSONObject): JSONObject {
-        // Строим URL: добавляем ?i=2 если challenge уже решён
         val url  = buildUrl(path)
         var text = rawPost(url, body)
 
         if (isChallengePage(text)) {
-            Log.d(TAG, "Challenge detected, launching WebView…")
-            val ctx = activityContext
-            if (ctx == null) {
-                Log.e(TAG, "activityContext is null — cannot resolve challenge")
-                return errorJson("Сервер требует проверку. Перезапустите приложение.")
-            }
-            val solved = ChallengeResolver.resolve(ctx, cookieManager)
-            if (!solved) {
-                return errorJson("Не удалось пройти проверку сервера. Попробуйте позже.")
-            }
+            Log.d(TAG, "Challenge on $path, solving via WebView…")
+            val ctx = activityContext ?: return errorJson("Перезапустите приложение")
+
+            // Извлекаем redirectUrl (?i=1) и имя куки прямо из HTML
+            val redirectUrl = ChallengeResolver.parseRedirectUrl(text)
+                ?: "$BASE$path?i=1"  // fallback
+            val cookieName  = ChallengeResolver.parseCookieName(text)
+            Log.d(TAG, "redirectUrl=$redirectUrl cookieName=$cookieName")
+
+            val solved = ChallengeResolver.resolve(ctx, cookieManager, redirectUrl, cookieName)
+            if (!solved) return errorJson("Не удалось пройти проверку сервера")
+
             challengeSolved = true
-            // Повторяем с ?i=2 — именно так делает оригинальный клиент
+            // Retry с ?i=2 (как в оригинале после решения challenge)
             text = rawPost(buildUrl(path), body)
-            Log.d(TAG, "Retry after challenge: ${text.take(100)}")
+            Log.d(TAG, "Retry response: ${text.take(120)}")
         }
 
         if (isChallengePage(text)) {
-            Log.e(TAG, "Still challenge after retry")
+            Log.e(TAG, "Challenge again after retry")
             return errorJson("Сервер не ответил. Попробуйте позже.")
         }
 
@@ -202,47 +189,30 @@ object ApiClient {
         }
     }
 
-    /**
-     * Строит URL: добавляет ?i=2 к .php если challenge решён.
-     * Точно повторяет resolveRuntimeUrl из shared-client.js.
-     */
+    /** Добавляет ?i=2 к .php если challenge уже решён */
     private fun buildUrl(path: String): String {
         if (!challengeSolved) return "$BASE$path"
-        // Добавляем ?i=2 к .php endpoint-ам
-        return if (path.endsWith(".php") || path.contains(".php?")) {
-            if (path.contains("?")) "$BASE$path&i=$CHALLENGE_I_VALUE"
-            else "$BASE$path?i=$CHALLENGE_I_VALUE"
-        } else {
-            "$BASE$path"
-        }
+        return if (path.contains("?")) "$BASE$path&i=2" else "$BASE$path?i=2"
     }
 
     private fun isChallengePage(text: String): Boolean {
         val t = text.trimStart()
-        // Точная проверка как в shared-client.js
-        return t.startsWith("<") && (
-            t.contains("slowAES") ||
-            t.contains("__test=") ||   // двойное подчёркивание!
-            t.contains("aes.js") ||
-            t.contains("slowAES.decrypt")
-        )
+        return t.startsWith("<") && (t.contains("slowAES") || t.contains("aes.js"))
     }
 
     private fun rawPost(url: String, body: JSONObject): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.apply {
             requestMethod  = "POST"
-            connectTimeout = TIMEOUT
-            readTimeout    = TIMEOUT
+            connectTimeout = TIMEOUT; readTimeout = TIMEOUT
             doOutput       = true
-            setRequestProperty("Content-Type",      "application/json")
-            setRequestProperty("Accept",            "application/json, text/html")
-            // Точный UA как в браузере — важно для challenge
+            setRequestProperty("Content-Type",     "application/json")
+            setRequestProperty("Accept",           "application/json, text/html")
             setRequestProperty("User-Agent",
                 "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
-            setRequestProperty("X-Requested-With",  "XMLHttpRequest")
-            setRequestProperty("Origin",            BASE)
-            setRequestProperty("Referer",           "$BASE/pages/clicker/")
+            setRequestProperty("X-Requested-With", "XMLHttpRequest")
+            setRequestProperty("Origin",           BASE)
+            setRequestProperty("Referer",          "$BASE/pages/clicker/")
         }
         conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code   = conn.responseCode
@@ -253,9 +223,7 @@ object ApiClient {
         return text
     }
 
-    private fun errorJson(msg: String) = JSONObject().apply {
-        put("success", false); put("message", msg)
-    }
+    private fun errorJson(msg: String) = JSONObject().apply { put("success", false); put("message", msg) }
 
     // ── Parsers ─────────────────────────────────────────────────
 
